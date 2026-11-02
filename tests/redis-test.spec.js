@@ -7,8 +7,6 @@ test('Проверка интеграции с Redis: Запись и быстр
 
     const fakeSessionKey = 'user_token:test-user';
     const fakeJwtToken = 'SECRET_JWT_MOCK_TOKEN_12345';
-   expect(true).toBe(false);
-
     // 1. Имитируем бэкенд: быстро записываем токен в кэш оперативки Redis
     await redisCtrl.setKey(fakeSessionKey, fakeJwtToken);
     console.log(`[Redis Write]: Токен успешно закэширован под ключом: ${fakeSessionKey}`);

@@ -7,8 +7,10 @@
 <p><strong>One JavaScript test project for browser flows, APIs, databases, cache, and message queues.</strong></p>
 
 <p>
+  <a href="https://github.com/DuishonAbdykerimov/playwright-infra-e2e/actions/workflows/playwright.yml"><img src="https://github.com/DuishonAbdykerimov/playwright-infra-e2e/actions/workflows/playwright.yml/badge.svg?branch=main" alt="Playwright CI"></a>
   <a href="https://github.com/microsoft/playwright"><img src="https://img.shields.io/badge/Playwright-1.63-2EAD33?logo=playwright&logoColor=white" alt="Playwright"></a>
   <img src="https://img.shields.io/badge/JavaScript-ES%20Modules-F7DF1E?logo=javascript&logoColor=222" alt="JavaScript ES Modules">
+  <img src="https://img.shields.io/badge/CI%20failure%20triage-GitHub%20Actions%20%2B%20n8n%20%2B%20AI-7C3AED?logo=n8n&logoColor=white" alt="GitHub Actions, n8n and AI failure triage">
   <img src="https://img.shields.io/badge/PostgreSQL-15-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL 15">
   <img src="https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white" alt="Redis 7">
   <img src="https://img.shields.io/badge/RabbitMQ-3-FF6600?logo=rabbitmq&logoColor=white" alt="RabbitMQ 3">
@@ -18,6 +20,7 @@
 <p>
   <a href="#-overview">Overview</a> ·
   <a href="#-test-coverage">Test coverage</a> ·
+  <a href="#-ci-failure-triage">CI failure triage</a> ·
   <a href="#-quick-start">Quick start</a> ·
   <a href="#-monitoring-and-load-test">Monitoring</a> ·
   <a href="#-reports--debugging-artifacts">Reports</a> ·
@@ -52,6 +55,26 @@ The infrastructure services and the Playwright test runner can run together thro
 The API/browser scenario requires a valid demo-app account, provided through `ECOM_USER_EMAIL` and `ECOM_USER_PASSWORD`. Credentials are not committed to the repository.
 
 GitHub Actions builds and runs the Playwright container with Docker Compose, which starts PostgreSQL, Redis, and RabbitMQ and waits for their health checks. The workflow runs on pushes and pull requests to `main`/`master`, and can also be started manually with **Actions → Playwright Tests → Run workflow**. The API/browser scenario is reported as skipped when its credentials are not configured; add `ECOM_USER_EMAIL` and `ECOM_USER_PASSWORD` under **Repository Settings → Secrets and variables → Actions** to enable it in CI.
+
+## 🤖 CI failure triage
+
+This project connects automated test execution to an AI-assisted incident workflow:
+
+```mermaid
+flowchart LR
+    Dev[Push or pull request] --> Actions[GitHub Actions]
+    Actions --> Tests[Docker Compose + Playwright]
+    Tests -->|pass| Green[Successful CI run]
+    Tests -->|fail| Summary[Failure summary + run link]
+    Summary -->|HTTPS POST| Webhook[n8n production webhook]
+    Webhook --> AI[AI analysis in the n8n workflow]
+    AI --> Result[Debug insight delivered by the configured workflow]
+    Tests -.->|failure artifacts| Artifacts[Logs, report, screenshots, trace]
+```
+
+When a test fails, the workflow extracts a concise failure summary and sends it with the branch, commit, workflow name, and run URL to an active n8n Production Webhook. The workflow validates the webhook URL and HTTP response, redacts configured account credentials from the summary, and uploads test logs and reports as GitHub Actions artifacts. The n8n workflow can pass that context to ChatGPT and deliver its analysis through the notification channel configured there.
+
+The n8n/ChatGPT workflow and its provider credentials are configured in n8n; they are not stored in this repository. This is AI-assisted failure analysis, not an automatic code-fix or self-healing deployment. To enable delivery, configure the GitHub Actions secret `N8N_WEBHOOK_URL` with the active Webhook node's full Production URL and expose n8n to GitHub-hosted runners through HTTPS. See [the setup instructions](#n8n-failure-notifications-from-github-actions).
 
 ## 🧱 Technology stack
 
@@ -259,6 +282,10 @@ To also remove the local PostgreSQL volume and its data, use `docker compose dow
 | **Нагрузочный тест RabbitMQ** | Публикация 100 тестовых сообщений, ожидание 15 секунд и очистка очереди. |
 
 Для API/browser-теста нужны `ECOM_USER_EMAIL` и `ECOM_USER_PASSWORD` — учётные данные demo-приложения. Не сохраняйте их в Git.
+
+### AI-разбор ошибок в CI
+
+При падении теста GitHub Actions собирает краткое описание ошибки и ссылку на запуск, затем отправляет их в Production Webhook n8n. Вебхук запускает настроенный в n8n сценарий: он может передать контекст в ChatGPT и отправить разбор через выбранный канал. Логи и отчёты остаются в артефактах GitHub Actions. Это AI-помощь в диагностике, а не автоматическое исправление кода.
 
 ### Быстрый запуск
 
