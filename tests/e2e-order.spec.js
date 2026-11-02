@@ -8,7 +8,7 @@ const userPassword = process.env.ECOM_USER_PASSWORD;
 let token;
 let orderId;
 
-//test.describe('API order tests', () => {
+test.describe('API order tests', () => {
     test.skip(
         !userEmail || !userPassword,
         'Set ECOM_USER_EMAIL and ECOM_USER_PASSWORD to enable API order tests.',
@@ -22,6 +22,8 @@ let orderId;
         orderId = await api.createOrder(token, productId);
 
         console.log(`[API Бэкенд]: Создан заказ с ID: ${orderId}`);
+        expect(true).toBe(false);
+
     });
 
     test.afterAll(async ({ request }) => {
