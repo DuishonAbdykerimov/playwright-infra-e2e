@@ -22,8 +22,17 @@ jobs:
       # --- 🔥 ВОТ ОН, НАШ ИИ-КОНВЕЙЕР САМОИСЦЕЛЕНИЯ ---
       - name: Send Failure Webhook to n8n AI Engine
         if: failure() # Сработает ТОЛЬКО если тесты внутри докера упали!
+        env:
+          N8N_WEBHOOK_URL: ${{ secrets.N8N_WEBHOOK_URL }}
         run: |
-          curl -X POST https://loca.lt \
+          if [ -z "$N8N_WEBHOOK_URL" ]; then
+            echo "::error::GitHub Actions secret N8N_WEBHOOK_URL is not configured."
+            exit 1
+          fi
+          curl --fail-with-body --silent --show-error \
+            --retry 2 \
+            --retry-delay 2 \
+            -X POST "$N8N_WEBHOOK_URL" \
             -H "Content-Type: application/json" \
             -d '{
               "status": "failed",
