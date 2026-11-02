@@ -156,7 +156,7 @@ services:
     ports:
       - "5678:5678"
     environment:
-      WEBHOOK_URL: ${N8N_PUBLIC_URL:-http://localhost:5678/}
+      N8N_WEBHOOK_URL: ${N8N_PUBLIC_URL:-https://duishon-n8n.loca.lt/}
       GENERIC_TIMEZONE: Europe/Moscow
     volumes:
       - n8n_data:/home/node/.n8n
