@@ -170,6 +170,18 @@ The RabbitMQ management console is available at [http://localhost:15672](http://
 
 > The credentials in `docker-compose.yml` are local development defaults for this disposable test environment. Do not reuse them for a public or production deployment.
 
+### n8n failure notifications from GitHub Actions
+
+The `n8n` service listens on port `5678`. GitHub-hosted runners cannot reach `localhost` on your computer, so expose n8n through a stable public HTTPS tunnel or reverse proxy and set its public base URL in `.env`:
+
+```dotenv
+N8N_PUBLIC_URL=https://your-public-n8n-host.example/
+```
+
+`N8N_PUBLIC_URL` is the public base URL (include the trailing slash), not the webhook-node URL. In n8n, create a **Webhook** node that accepts `POST`, connect it to the desired notification action, save and activate the workflow, then copy that node's **Production URL**. Add the complete URL (including its `/webhook/...` path) as the GitHub Actions repository secret `N8N_WEBHOOK_URL`. Do not use the node's Test URL, the tunnel homepage, or just the host name.
+
+The workflow sends the failing test summary and GitHub Actions run link. A `404` usually means the workflow is inactive, the URL path or HTTP method does not match the Webhook node, or the tunnel is forwarding to a different n8n instance. Check that the tunnel forwards to port `5678`. Do not commit the public webhook URL or put it in chat.
+
 ### Alternative: run tests on your host
 
 ```bash

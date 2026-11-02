@@ -63,10 +63,16 @@ jobs:
           from urllib.parse import urlparse
 
           webhook = urlparse(os.environ["N8N_WEBHOOK_URL"])
-          if webhook.scheme != "https" or not webhook.netloc or webhook.path in ("", "/"):
+          if (
+              webhook.scheme != "https"
+              or not webhook.netloc
+              or not webhook.path.startswith("/webhook/")
+              or webhook.path.startswith("/webhook-test/")
+          ):
               print(
-                  "::error::N8N_WEBHOOK_URL must be the public HTTPS production webhook URL, "
-                  "including its webhook path (not the LocalTunnel homepage).",
+                  "::error::N8N_WEBHOOK_URL must be the full HTTPS Production URL from an active "
+                  "n8n Webhook node (POST method, /webhook/ path; not the base tunnel URL or "
+                  "the /webhook-test/ test URL).",
                   file=sys.stderr,
               )
               sys.exit(1)
@@ -104,7 +110,11 @@ jobs:
             --data-binary "$payload")"
 
           if [[ ! "$http_status" =~ ^2[0-9][0-9]$ ]]; then
-            echo "::error::n8n webhook returned HTTP $http_status; use the active production webhook URL, not a redirect or tunnel homepage."
+            if [[ "$http_status" == "404" ]] && grep -Eqi 'webhook.*(not registered|not found)|not registered.*webhook' "$response_file"; then
+              echo "::error::n8n returned 404 because this webhook is not registered. Activate the workflow in n8n, confirm the node uses POST, and copy its Production URL exactly into N8N_WEBHOOK_URL."
+            else
+              echo "::error::n8n webhook returned HTTP $http_status. Confirm N8N_WEBHOOK_URL is the exact Production URL from an active n8n Webhook node and that the public tunnel forwards to port 5678."
+            fi
             exit 1
           fi
 

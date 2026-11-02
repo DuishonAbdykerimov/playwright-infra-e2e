@@ -156,8 +156,8 @@ services:
     ports:
       - "5678:5678"
     environment:
-      - WEBHOOK_URL=http://localhost:5678/
-      - GENERIC_TIMEZONE=Europe/Moscow
+      WEBHOOK_URL: ${N8N_PUBLIC_URL:-http://localhost:5678/}
+      GENERIC_TIMEZONE: Europe/Moscow
     volumes:
       - n8n_data:/home/node/.n8n
     networks:
