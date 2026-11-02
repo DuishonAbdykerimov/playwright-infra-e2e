@@ -22,7 +22,7 @@ test.describe('API order tests', () => {
         orderId = await api.createOrder(token, productId);
 
         console.log(`[API Бэкенд]: Создан заказ с ID: ${orderId}`);
-        expect(true).toBe(false);
+        
 
     });
 
