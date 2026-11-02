@@ -63,15 +63,20 @@ jobs:
           from urllib.parse import urlparse
 
           webhook = urlparse(os.environ["N8N_WEBHOOK_URL"])
-          if (
-              webhook.scheme != "https"
-              or not webhook.netloc
-              or webhook.path in ("", "/")
-              or webhook.path.startswith("/webhook-test/")
-          ):
+          problems = []
+          if webhook.scheme != "https":
+              problems.append("must use https")
+          if not webhook.netloc:
+              problems.append("must include a public host")
+          if webhook.path in ("", "/"):
+              problems.append("must include the Webhook node path, not only the n8n/tunnel homepage")
+          if webhook.path.startswith("/webhook-test/"):
+              problems.append("must use the Production URL, not the /webhook-test/ URL")
+
+          if problems:
               print(
-                  "::error::N8N_WEBHOOK_URL must be the full HTTPS URL from an n8n Webhook node, "
-                  "including its path (not localhost, a tunnel homepage, or the /webhook-test/ URL).",
+                  "::error::N8N_WEBHOOK_URL is invalid: " + "; ".join(problems) + ". "
+                  "Copy the Production URL from the active n8n Webhook node.",
                   file=sys.stderr,
               )
               sys.exit(1)
