@@ -1,3 +1,5 @@
+version: '3.8'
+
 services:
   # 1. Слой Базы Данных (PostgreSQL)
   postgres_db:
@@ -11,6 +13,8 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    networks:
+      - infra_e2e_network
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U qa_user -d ecom_test_db"]
       interval: 5s
@@ -23,6 +27,8 @@ services:
     container_name: qa_redis
     ports:
       - "6379:6379"
+    networks:
+      - infra_e2e_network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -36,10 +42,12 @@ services:
     ports:
       - "5672:5672"   # Порт для пересылки сообщений кодом
       - "15672:15672" # Порт для красивой веб-панели управления
-      - "15692:15692" # <<< ДОБАВЛЯЕМ ЭТОТ ПОРТ ДЛЯ СБОРА МЕТРИК
+      - "15692:15692" # Порт для сбора метрик Prometheus
     environment:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
+    networks:
+      - infra_e2e_network
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 10s
@@ -47,6 +55,7 @@ services:
       retries: 12
       start_period: 20s
 
+  # 4. Тестовое окружение Playwright JS
   e2e:
     profiles: ["test"]
     build:
@@ -74,57 +83,91 @@ services:
       - ./playwright-report:/app/playwright-report
       - ./test-results:/app/test-results
       - ./allure-results:/app/allure-results
+    networks:
+      - infra_e2e_network
+
+  # 5. Сбор метрик (Prometheus)
   prometheus:
     image: prom/prometheus:v2.45.0
     container_name: qa_prometheus
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
     ports:
-      - "9090:9090" # Порт админки Prometheus
+      - "9090:9090"
+    networks:
+      - infra_e2e_network
     deploy:
       resources:
         limits:
-          memory: 256M # Жесткий лимит памяти!
+          memory: 256M
 
+  # 6. Визуализация метрик (Grafana)
   grafana:
     image: grafana/grafana-oss:10.0.0
     container_name: qa_grafana
     ports:
-      - "3000:3000" # Порт веб-интерфейса Графаны
+      - "3000:3000"
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin # Пароль для входа в Графану
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    networks:
+      - infra_e2e_network
     deploy:
       resources:
         limits:
-          memory: 512M # Жесткий лимит памяти!
+          memory: 512M
+
+  # 7. База логов (Elasticsearch)
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:7.17.10
     container_name: qa_elasticsearch
     environment:
       - discovery.type=single-node
-      - "ES_JAVA_OPTS=-Xms256m -Xmx256m" # Ограничиваем аппетит Java внутри Эластика
+      - "ES_JAVA_OPTS=-Xms256m -Xmx256m"
     ports:
       - "9200:9200"
+    networks:
+      - infra_e2e_network
     deploy:
       resources:
         limits:
-          memory: 512M # Жесткий потолок для Mac!
+          memory: 512M
 
+  # 8. Визуализация логов (Kibana)
   kibana:
     image: docker.elastic.co/kibana/kibana:7.17.10
     container_name: qa_kibana
     ports:
-      - "5601:5601" # Порт веб-интерфейса Кибаны
+      - "5601:5601"
     environment:
       - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
     depends_on:
       - elasticsearch
+    networks:
+      - infra_e2e_network
     deploy:
       resources:
         limits:
-          memory: 512M # Жесткий потолок для Mac!
+          memory: 512M
 
-
+  # 9. Диспетчер автоматизации (n8n)
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    container_name: n8n_infra_e2e
+    ports:
+      - "5678:5678"
+    environment:
+      - WEBHOOK_URL=http://localhost:5678/
+      - GENERIC_TIMEZONE=Europe/Moscow
+    volumes:
+      - n8n_data:/home/node/.n8n
+    networks:
+      - infra_e2e_network
+    restart: always
 
 volumes:
+  n8n_data:
   pgdata:
+
+networks:
+  infra_e2e_network:
+    driver: bridge

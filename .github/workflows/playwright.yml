@@ -15,8 +15,23 @@ jobs:
       ECOM_USER_PASSWORD: ${{ secrets.ECOM_USER_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
+
       - name: Build and run tests in Docker
         run: docker compose --profile test run --build --rm e2e
+
+      # --- 🔥 ВОТ ОН, НАШ ИИ-КОНВЕЙЕР САМОИСЦЕЛЕНИЯ ---
+      - name: Send Failure Webhook to n8n AI Engine
+        if: failure() # Сработает ТОЛЬКО если тесты внутри докера упали!
+        run: |
+          curl -X POST https://loca.lt \
+            -H "Content-Type: application/json" \
+            -d '{
+              "status": "failed",
+              "test_name": "Playwright E2E Client Dashboard Run",
+              "error": "Автотест упал в Docker-окружении GitHub Actions. ИИ-конвейер собирает логи для дебага.",
+              "timestamp": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'"
+            }'
+
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
@@ -26,6 +41,7 @@ jobs:
             test-results/
             allure-results/
           retention-days: 30
+
       - name: Stop test infrastructure
         if: ${{ always() }}
         run: docker compose down --volumes
