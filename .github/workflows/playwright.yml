@@ -66,13 +66,12 @@ jobs:
           if (
               webhook.scheme != "https"
               or not webhook.netloc
-              or not webhook.path.startswith("/webhook/")
+              or webhook.path in ("", "/")
               or webhook.path.startswith("/webhook-test/")
           ):
               print(
-                  "::error::N8N_WEBHOOK_URL must be the full HTTPS Production URL from an active "
-                  "n8n Webhook node (POST method, /webhook/ path; not the base tunnel URL or "
-                  "the /webhook-test/ test URL).",
+                  "::error::N8N_WEBHOOK_URL must be the full HTTPS URL from an n8n Webhook node, "
+                  "including its path (not localhost, a tunnel homepage, or the /webhook-test/ URL).",
                   file=sys.stderr,
               )
               sys.exit(1)
