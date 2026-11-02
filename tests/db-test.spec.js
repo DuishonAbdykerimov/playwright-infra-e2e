@@ -27,7 +27,7 @@ test('Проверка интеграции с PostgreSQL: Создание и �
     const usersInDb = await db.query('SELECT * FROM qa_users WHERE email = \$1;', [randomEmail]);
 
     // 5. ПРОВЕРКА (Assertion): Проверяем, что база вернула нам ровно 1 строку
-    expect(usersInDb.length).toBe(1);
+    expect(usersInDb.length).toBe(2);
 
     // Проверяем, что имя внутри базы совпадает с тем, что мы отправляли
     expect(usersInDb[0].username).toBe('Duishon');
