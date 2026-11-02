@@ -87,10 +87,15 @@ The n8n/ChatGPT workflow and its provider credentials are configured in n8n; the
 | **Redis 7 + `redis`** | Cache integration test |
 | **RabbitMQ 3 + `amqplib`** | AMQP publish/consume integration test |
 | **Docker Compose** | Local, repeatable infrastructure setup |
+| **GitHub Actions** | CI workflow for Dockerized Playwright tests, failure summaries, and artifacts |
+| **n8n** | Webhook-driven orchestration for CI failure notifications and AI triage |
+| **OpenAI ChatGPT** | AI analysis step configured in the n8n workflow |
 | **Prometheus + Grafana** | RabbitMQ metrics scraping and metrics dashboard service |
 | **Elasticsearch + Kibana** | Local search and data exploration services |
 | **Kubernetes** | PostgreSQL deployment and integration test through a temporary port-forward |
 | **HTML reporter + Allure** | Test reporting |
+
+**Development tooling:** Claude Code was used as an AI coding assistant during development; it is not part of the application runtime or CI failure-notification pipeline.
 
 ## 📊 Monitoring and load test
 
