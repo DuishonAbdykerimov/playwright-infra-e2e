@@ -18,6 +18,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Node.js dependencies
+        run: npm ci
+
       - name: Generate optional synthetic boundary fixture
         if: ${{ env.OPENROUTER_API_KEY != '' }}
         run: node scripts/ai/database-disrupter.js
