@@ -14,9 +14,14 @@ jobs:
     env:
       ECOM_USER_EMAIL: ${{ secrets.ECOM_USER_EMAIL }}
       ECOM_USER_PASSWORD: ${{ secrets.ECOM_USER_PASSWORD }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
     steps:
       - uses: actions/checkout@v4
-      
+
+      - name: Generate optional synthetic boundary fixture
+        if: ${{ env.OPENROUTER_API_KEY != '' }}
+        run: node scripts/ai/database-disrupter.js
+
       - name: Build and run tests in Docker
         id: e2e
         shell: bash
@@ -39,91 +44,6 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
           exit "$test_status"
-
-      # --- НАШ ИИ-ВЕБХУК САМОИСЦЕЛЕНИЯ (ВСТАВИЛИ СЮДА!) ---
-      - name: Send Failure Webhook to n8n AI Engine
-        if: ${{ failure() }}
-        env:
-          N8N_WEBHOOK_URL: ${{ secrets.N8N_WEBHOOK_URL }}
-          N8N_FAILURE_SUMMARY: ${{ steps.e2e.outputs.failure_summary }}
-          ECOM_USER_EMAIL: ${{ secrets.ECOM_USER_EMAIL }}
-          ECOM_USER_PASSWORD: ${{ secrets.ECOM_USER_PASSWORD }}
-          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          GITHUB_COMMIT: ${{ github.sha }}
-          GITHUB_BRANCH: ${{ github.ref_name }}
-          GITHUB_WORKFLOW: ${{ github.workflow }}
-        run: |
-          if [[ -z "$N8N_WEBHOOK_URL" ]]; then
-            echo "::error::GitHub Actions secret N8N_WEBHOOK_URL is not configured."
-            exit 1
-          fi
-
-          python3 - <<'PY'
-          import os
-          import sys
-          from urllib.parse import urlparse
-
-          webhook = urlparse(os.environ["N8N_WEBHOOK_URL"])
-          problems = []
-          if webhook.scheme != "https":
-              problems.append("must use https")
-          if not webhook.netloc:
-              problems.append("must include a public host")
-          if webhook.path in ("", "/"):
-              problems.append("must include the Webhook node path, not only the n8n/tunnel homepage")
-          if webhook.path.startswith("/webhook-test/"):
-              problems.append("must use the Production URL, not the /webhook-test/ URL")
-
-          if problems:
-              print(
-                  "::error::N8N_WEBHOOK_URL is invalid: " + "; ".join(problems) + ". "
-                  "Copy the Production URL from the active n8n Webhook node.",
-                  file=sys.stderr,
-              )
-              sys.exit(1)
-          PY
-
-          payload="$(python3 - <<'PY'
-          import json
-          import os
-
-          summary = os.environ.get("N8N_FAILURE_SUMMARY", "")
-          for secret_name in ("ECOM_USER_EMAIL", "ECOM_USER_PASSWORD"):
-              secret = os.environ.get(secret_name, "")
-              if secret:
-                  summary = summary.replace(secret, "[REDACTED]")
-
-          print(json.dumps({
-              "status": "failed",
-              "test_name": "Playwright E2E Client Dashboard Run",
-              "error": summary,
-              "workflow": os.environ["GITHUB_WORKFLOW"],
-              "branch": os.environ["GITHUB_BRANCH"],
-              "commit": os.environ["GITHUB_COMMIT"],
-              "run_url": os.environ["GITHUB_RUN_URL"],
-          }))
-          PY
-          )"
-
-          response_file="$(mktemp)"
-          trap 'rm -f "$response_file"' EXIT
-          http_status="$(curl --silent --show-error --max-time 30 \
-            --output "$response_file" \
-            --write-out '%{http_code}' \
-            --request POST "$N8N_WEBHOOK_URL" \
-            --header "Content-Type: application/json" \
-            --data-binary "$payload")"
-
-          if [[ ! "$http_status" =~ ^2[0-9][0-9]$ ]]; then
-            if [[ "$http_status" == "404" ]] && grep -Eqi 'webhook.*(not registered|not found)|not registered.*webhook' "$response_file"; then
-              echo "::error::n8n returned 404 because this webhook is not registered. Activate the workflow in n8n, confirm the node uses POST, and copy its Production URL exactly into N8N_WEBHOOK_URL."
-            else
-              echo "::error::n8n webhook returned HTTP $http_status. Confirm N8N_WEBHOOK_URL is the exact Production URL from an active n8n Webhook node and that the public tunnel forwards to port 5678."
-            fi
-            exit 1
-          fi
-
-          echo "n8n accepted the failure notification (HTTP $http_status)."
 
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
