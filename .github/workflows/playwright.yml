@@ -5,18 +5,13 @@ on:
   pull_request:
     branches: [ main, master ]
   workflow_dispatch:
-    inputs:
-      run_ai_smoke_test:
-        description: Run a synthetic failure through the AI reporter
-        required: false
-        type: boolean
-        default: false
 jobs:
   test:
     timeout-minutes: 60
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
+      pull-requests: write
     env:
       ECOM_USER_EMAIL: ${{ secrets.ECOM_USER_EMAIL }}
       ECOM_USER_PASSWORD: ${{ secrets.ECOM_USER_PASSWORD }}
@@ -32,12 +27,8 @@ jobs:
       - name: Install Node.js dependencies
         run: npm ci
 
-      - name: Run AI reporter smoke test
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_ai_smoke_test }}
-        run: node scripts/ai/ai-smoke-test.js
-
       - name: Generate optional synthetic boundary fixture
-        if: ${{ env.OPENROUTER_API_KEY != '' && !(github.event_name == 'workflow_dispatch' && inputs.run_ai_smoke_test) }}
+        if: ${{ env.OPENROUTER_API_KEY != '' }}
         continue-on-error: true
         run: node scripts/ai/database-disrupter.js
 
@@ -50,14 +41,18 @@ jobs:
           test_status=${PIPESTATUS[0]}
           set -e
 
-          if [[ "$test_status" -ne 0 ]] && ! git diff --quiet -- tests/database-disruption.spec.js; then
-            echo "AI changed tests/database-disruption.spec.js; retrying that spec once."
+          if [[ "$test_status" -ne 0 ]] && ! git diff --quiet -- tests/; then
+            echo "AI changed test files; rerunning the full Playwright suite."
             set +e
-            docker compose --profile test run --rm e2e npx playwright test tests/database-disruption.spec.js 2>&1 | tee -a e2e-test.log
+            docker compose --profile test run --rm e2e 2>&1 | tee -a e2e-test.log
             retry_status=${PIPESTATUS[0]}
             set -e
+
             if [[ "$retry_status" -eq 0 ]]; then
               test_status=0
+              echo "ai_fix_validated=true" >> "$GITHUB_OUTPUT"
+            else
+              test_status=$retry_status
             fi
           fi
 
@@ -74,6 +69,30 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
           exit "$test_status"
+
+      - name: Open pull request for validated AI repairs
+        if: ${{ steps.e2e.outputs.ai_fix_validated == 'true' && github.event_name != 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ -z "$(git status --porcelain tests/)" ]]; then
+            echo "No AI-generated test changes to publish."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          branch="ai-self-healing/${GITHUB_RUN_ID}"
+          git switch -c "$branch"
+          git add tests/
+          git commit -m "chore(ai-healing): propose validated Playwright test repair"
+          git push origin "$branch"
+
+          gh pr create \
+            --base "$GITHUB_REF_NAME" \
+            --head "$branch" \
+            --title "chore(ai-healing): validated Playwright test repair" \
+            --body "AI generated a test repair after a Playwright failure. The full Playwright suite passed on the repaired working tree. Please review the diff before merging."
 
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
