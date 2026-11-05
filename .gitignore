@@ -5,6 +5,7 @@ node_modules/
 .env.*
 !.env.example
 /test-results/
+/test-data/disruption-fixtures.json
 /playwright-report/
 /blob-report/
 /allure-results/

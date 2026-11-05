@@ -46,11 +46,12 @@ async function runDisruptionEngine(apiKey) {
 
     const fixtures = parseJsonObject(rawResult);
 
-    const artifactDir = path.join(projectRoot, 'test-results');
+    const artifactDir = path.join(projectRoot, 'test-data');
     await mkdir(artifactDir, { recursive: true });
 
-    await writeFile(path.join(artifactDir, 'disruption-fixtures.json'), JSON.stringify(fixtures, null, 2), 'utf8');
-    console.log(`🎯 [Хакер-Разрушитель]: Деструктивные фикстуры успешно внедрены в ${path.join(artifactDir, 'disruption-fixtures.json')}`);
+    const outputPath = path.join(artifactDir, 'disruption-fixtures.json');
+    await writeFile(outputPath, JSON.stringify(fixtures, null, 2), 'utf8');
+    console.log(`🎯 [Хакер-Разрушитель]: Деструктивные фикстуры успешно внедрены в ${outputPath}`);
 
   } catch (error) {
     console.error('[Хакер-Разрушитель] Критический сбой при генерации фикстур:', error.message);

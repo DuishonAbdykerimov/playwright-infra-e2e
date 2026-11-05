@@ -81,6 +81,8 @@ services:
       rabbitmq_broker:
         condition: service_healthy
     volumes:
+      - ./tests:/app/tests
+      - ./test-data:/app/test-data
       - ./playwright-report:/app/playwright-report
       - ./test-results:/app/test-results
       - ./allure-results:/app/allure-results
