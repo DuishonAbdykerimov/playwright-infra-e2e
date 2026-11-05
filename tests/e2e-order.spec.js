@@ -54,8 +54,6 @@ test.describe('API order tests', () => {
         await page.goto('https://rahulshettyacademy.com/client/#/dashboard/myorders');
         const ordersResponse = await ordersResponsePromise;
 
-        await expect(page).toHaveTitle('Специально ломаем тест для проверки ИИ');
-
-        //expect(ordersResponse.status()).toBe(500);
+        expect(ordersResponse.status()).toBe(500);
     });
 });

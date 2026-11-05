@@ -10,12 +10,12 @@ class AiReporter {
         apiKey = getOpenRouterApiKey();
       } catch (error) {
         console.error(`[AI Engine] ${error.message}`);
-        return;
+        return false;
       }
 
       if (!apiKey) {
         console.warn('[AI Engine] Set OPENROUTER_API_KEY in .env or the CI secrets to enable AI analysis.');
-        return;
+        return false;
       }
 
       const sensitiveValues = [
@@ -64,6 +64,7 @@ class AiReporter {
         console.log('======================================================');
         console.log(redactSensitiveValues(analysis));
         console.log('======================================================\n');
+        return true;
       } catch (error) {
         const details = [
           error.status ? `HTTP ${error.status}` : null,
@@ -71,8 +72,11 @@ class AiReporter {
           error.message,
         ].filter(Boolean).join(' — ');
         console.error('[AI Engine] Could not analyze the test failure:', redactSensitiveValues(details));
+        return false;
       }
     }
+
+    return true;
   }
 }
 

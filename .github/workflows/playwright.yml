@@ -5,6 +5,12 @@ on:
   pull_request:
     branches: [ main, master ]
   workflow_dispatch:
+    inputs:
+      run_ai_smoke_test:
+        description: Run a synthetic failure through the AI reporter
+        required: false
+        type: boolean
+        default: false
 jobs:
   test:
     timeout-minutes: 60
@@ -26,8 +32,12 @@ jobs:
       - name: Install Node.js dependencies
         run: npm ci
 
+      - name: Run AI reporter smoke test
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_ai_smoke_test }}
+        run: node scripts/ai/ai-smoke-test.js
+
       - name: Generate optional synthetic boundary fixture
-        if: ${{ env.OPENROUTER_API_KEY != '' }}
+        if: ${{ env.OPENROUTER_API_KEY != '' && !(github.event_name == 'workflow_dispatch' && inputs.run_ai_smoke_test) }}
         run: node scripts/ai/database-disrupter.js
 
       - name: Build and run tests in Docker
