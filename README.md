@@ -10,7 +10,7 @@
   <a href="https://github.com/DuishonAbdykerimov/playwright-infra-e2e/actions/workflows/playwright.yml"><img src="https://github.com/DuishonAbdykerimov/playwright-infra-e2e/actions/workflows/playwright.yml/badge.svg?branch=main" alt="Playwright CI"></a>
   <a href="https://github.com/microsoft/playwright"><img src="https://img.shields.io/badge/Playwright-1.63-2EAD33?logo=playwright&logoColor=white" alt="Playwright"></a>
   <img src="https://img.shields.io/badge/JavaScript-ES%20Modules-F7DF1E?logo=javascript&logoColor=222" alt="JavaScript ES Modules">
-  <img src="https://img.shields.io/badge/CI%20failure%20triage-GitHub%20Actions%20%2B%20n8n%20%2B%20AI-7C3AED?logo=n8n&logoColor=white" alt="GitHub Actions, n8n and AI failure triage">
+  <img src="https://img.shields.io/badge/CI%20self--healing-GitHub%20Actions%20%2B%20OpenRouter%20AI-7C3AED?logo=githubactions&logoColor=white" alt="GitHub Actions and OpenRouter AI self-healing">
   <img src="https://img.shields.io/badge/PostgreSQL-15-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL 15">
   <img src="https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white" alt="Redis 7">
   <img src="https://img.shields.io/badge/RabbitMQ-3-FF6600?logo=rabbitmq&logoColor=white" alt="RabbitMQ 3">
@@ -54,29 +54,32 @@ The infrastructure services and the Playwright test runner can run together thro
 
 The API/browser scenario requires a valid demo-app account, provided through `ECOM_USER_EMAIL` and `ECOM_USER_PASSWORD`. Credentials are not committed to the repository.
 
-The optional direct AI failure reporter uses an OpenRouter API key from `OPENROUTER_API_KEY`. Set it in `.env` for local runs or as a GitHub Actions secret for CI. If the key is not configured, Playwright tests still run normally and only the direct AI analysis is skipped.
+The AI self-healing reporter uses an OpenRouter API key from `OPENROUTER_API_KEY`. Set it in `.env` for local runs or as a GitHub Actions secret for CI. If the key is not configured, Playwright tests still run normally, but AI analysis and repair are skipped.
 
 GitHub Actions builds and runs the Playwright container with Docker Compose, which starts PostgreSQL, Redis, and RabbitMQ and waits for their health checks. The workflow runs on pushes and pull requests to `main`/`master`, and can also be started manually with **Actions → Playwright Tests → Run workflow**. The API/browser scenario is reported as skipped when its credentials are not configured; add `ECOM_USER_EMAIL` and `ECOM_USER_PASSWORD` under **Repository Settings → Secrets and variables → Actions** to enable it in CI.
 
-## 🤖 CI failure triage
+## 🤖 CI failure triage & AI Self-Healing
 
-This project connects automated test execution to an AI-assisted incident workflow:
+The GitHub Actions pipeline can analyze failed Playwright tests and propose a validated repair without relying on external webhooks or an n8n instance:
 
 ```mermaid
 flowchart LR
     Dev[Push or pull request] --> Actions[GitHub Actions]
     Actions --> Tests[Docker Compose + Playwright]
     Tests -->|pass| Green[Successful CI run]
-    Tests -->|fail| Summary[Failure summary + run link]
-    Summary -->|HTTPS POST| Webhook[n8n production webhook]
-    Webhook --> AI[AI analysis in the n8n workflow]
-    AI --> Result[Debug insight delivered by the configured workflow]
-    Tests -.->|failure artifacts| Artifacts[Logs, report, screenshots, trace]
+    Tests -->|fail| Reporter[AI Self-Healing Reporter]
+    Reporter -->|Test source + error| LLM[OpenRouter API / Gemini 2.5 Flash]
+    LLM -->|Candidate repair| Fix[Update local test file]
+    Fix -->|Syntax check + full suite rerun| Validate{All tests pass?}
+    Validate -->|yes| Branch[Isolated AI repair branch]
+    Branch --> PR[Pull Request for review]
+    Validate -->|no| Failed[CI remains failed]
+    Tests -.->|failure artifacts| Artifacts[Logs, reports, traces]
 ```
 
-When a test fails, the workflow extracts a concise failure summary and sends it with the branch, commit, workflow name, and run URL to an active n8n Production Webhook. The workflow validates the webhook URL and HTTP response, redacts configured account credentials from the summary, and uploads test logs and reports as GitHub Actions artifacts. The n8n workflow can pass that context to ChatGPT and deliver its analysis through the notification channel configured there.
+After the final Playwright retry fails, `AiReporter` reads the failing JavaScript test and sends its source and error details to the configured OpenRouter model. Configured account credentials and the API key are redacted before the request. The reporter validates the generated JavaScript syntax before replacing a test file under `tests/`.
 
-The n8n/ChatGPT workflow and its provider credentials are configured in n8n; they are not stored in this repository. This is AI-assisted failure analysis, not an automatic code-fix or self-healing deployment. To enable delivery, configure the GitHub Actions secret `N8N_WEBHOOK_URL` with the active Webhook node's full Production URL and expose n8n to GitHub-hosted runners through HTTPS. See [the setup instructions](#n8n-failure-notifications-from-github-actions).
+If a test file changed, GitHub Actions reruns the full Playwright suite. Only when that rerun passes does the workflow create an isolated `ai-self-healing/<run-id>` branch and open a Pull Request for review; AI changes are not pushed directly to `main`. If analysis, syntax validation, or the rerun fails, the workflow remains failed and uploads its logs and test artifacts. MongoDB disruption data is generated as fixtures; this project does not currently run a MongoDB server.
 
 ## 🧱 Technology stack
 
@@ -90,9 +93,9 @@ The n8n/ChatGPT workflow and its provider credentials are configured in n8n; the
 | **Redis 7 + `redis`** | Cache integration test |
 | **RabbitMQ 3 + `amqplib`** | AMQP publish/consume integration test |
 | **Docker Compose** | Local, repeatable infrastructure setup |
-| **GitHub Actions** | CI workflow for Dockerized Playwright tests, failure summaries, and artifacts |
-| **n8n** | Webhook-driven orchestration for CI failure notifications and AI triage |
-| **OpenAI ChatGPT** | AI analysis step configured in the n8n workflow |
+| **GitHub Actions** | Dockerized Playwright CI, AI-assisted test repair validation, and Pull Request creation |
+| **OpenRouter + Gemini 2.5 Flash** | AI test-failure analysis and candidate repair generation |
+| **n8n** | Optional local automation service; not required for CI self-healing |
 | **Prometheus + Grafana** | RabbitMQ metrics scraping and metrics dashboard service |
 | **Elasticsearch + Kibana** | Local search and data exploration services |
 | **Kubernetes** | PostgreSQL deployment and integration test through a temporary port-forward |
@@ -202,18 +205,6 @@ The RabbitMQ management console is available at [http://localhost:15672](http://
 
 > The credentials in `docker-compose.yml` are local development defaults for this disposable test environment. Do not reuse them for a public or production deployment.
 
-### n8n failure notifications from GitHub Actions
-
-The `n8n` service listens on port `5678`. GitHub-hosted runners cannot reach `localhost` on your computer, so expose n8n through a stable public HTTPS tunnel or reverse proxy and set its public base URL in `.env`:
-
-```dotenv
-N8N_PUBLIC_URL=https://your-public-n8n-host.example/
-```
-
-`N8N_PUBLIC_URL` is the public base URL (include the trailing slash), not the webhook-node URL. In n8n, create a **Webhook** node that accepts `POST`, connect it to the desired notification action, save and activate the workflow, then copy that node's **Production URL**. Add the complete URL (including its `/webhook/...` path) as the GitHub Actions repository secret `N8N_WEBHOOK_URL`. Do not use the node's Test URL, the tunnel homepage, or just the host name.
-
-The workflow sends the failing test summary and GitHub Actions run link. A `404` usually means the workflow is inactive, the URL path or HTTP method does not match the Webhook node, or the tunnel is forwarding to a different n8n instance. Check that the tunnel forwards to port `5678`. Do not commit the public webhook URL or put it in chat.
-
 ### Alternative: run tests on your host
 
 ```bash
@@ -290,11 +281,18 @@ To also remove the local PostgreSQL volume and its data, use `docker compose dow
 | **RabbitMQ** | Публикация JSON-сообщения, чтение из очереди и проверка полей. |
 | **Нагрузочный тест RabbitMQ** | Публикация 100 тестовых сообщений, ожидание 15 секунд и очистка очереди. |
 
-Для API/browser-теста нужны `ECOM_USER_EMAIL` и `ECOM_USER_PASSWORD` — учётные данные demo-приложения. Не сохраняйте их в Git.
+Для API/browser-теста нужны `ECOM_USER_EMAIL` и `ECOM_USER_PASSWORD` — учётные данные demo-приложения. Для AI-разбора и исправления также задайте `OPENROUTER_API_KEY`. Не сохраняйте секреты в Git.
 
-### AI-разбор ошибок в CI
+### 🤖 AI-разбор ошибок и автоматическое исправление (Self-Healing)
 
-При падении теста GitHub Actions собирает краткое описание ошибки и ссылку на запуск, затем отправляет их в Production Webhook n8n. Вебхук запускает настроенный в n8n сценарий: он может передать контекст в ChatGPT и отправить разбор через выбранный канал. Логи и отчёты остаются в артефактах GitHub Actions. Это AI-помощь в диагностике, а не автоматическое исправление кода.
+В GitHub Actions цикл Self-Healing работает без внешних вебхуков и обязательного n8n:
+
+1. **Перехват сбоя:** после последней неудачной попытки Playwright репортёр `AiReporter` получает ошибку теста.
+2. **Анализ:** репортёр читает исходный код упавшего JavaScript-теста и отправляет его вместе с ошибкой в OpenRouter (по умолчанию Gemini 2.5 Flash). Настроенные учётные данные и API-ключ маскируются перед отправкой.
+3. **Кандидат исправления:** ИИ возвращает полный файл теста. Репортёр проверяет синтаксис и обновляет только файл внутри `tests/`.
+4. **Повторная проверка:** GitHub Actions заново запускает полный набор Playwright-тестов. Если он проходит, workflow создаёт отдельную ветку `ai-self-healing/<run-id>` и открывает Pull Request для проверки; напрямую в `main` исправление не отправляется.
+
+Чтобы включить цикл в GitHub Actions, добавьте `OPENROUTER_API_KEY` в секреты репозитория. Без ключа тесты продолжают запускаться, но AI-анализ и исправление пропускаются. Если исправленный тест или полный повторный прогон не проходит, workflow остаётся неуспешным. Логи и тестовые артефакты загружаются в GitHub Actions. MongoDB в этом проекте представлена генерируемыми фикстурами; отдельный MongoDB-сервер не запускается.
 
 ### Быстрый запуск
 
