@@ -2,6 +2,7 @@ import { OpenAI } from 'openai';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { getOpenRouterApiKey, projectRoot } from './openrouter-config.js';
+import { normalizeDisruptionFixtures } from './normalize-disruption-fixtures.js';
 import { parseJsonObject } from './parse-json-object.js';
 
 let apiKey;
@@ -44,7 +45,7 @@ async function runDisruptionEngine(apiKey) {
     const rawResult = completion.choices[0]?.message?.content;
     if (!rawResult) throw new Error('ИИ вернул пустой ответ.');
 
-    const fixtures = parseJsonObject(rawResult);
+    const fixtures = normalizeDisruptionFixtures(parseJsonObject(rawResult));
 
     const artifactDir = path.join(projectRoot, 'test-data');
     await mkdir(artifactDir, { recursive: true });
