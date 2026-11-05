@@ -21,13 +21,9 @@ test.describe('Глубокое тестирование баз данных (Х
   test('Тест устойчивости PostgreSQL к длинным именам', async ({ request }) => {
     console.log('🔥 Проверка PostgreSQL фикстурой:', fixtures.postgres);
     
-    // Имитируем отправку данных Хакера-Разрушителя в базу данных (через ваше API или ORM)
-    // Ожидаемое поведение: имя не должно превышать 64 символов, если это ограничение БД.
-    // Если по бизнес-логике имя может быть длиннее 5 символов (как в случае с "default_hacker" - 14 символов),
-    // то ожидание должно быть скорректировано.
-    // Исправлено: ожидание изменено до 64 символов, чтобы соответствовать типичным ограничениям БД
-    // и чтобы тест не падал на валидных, но длинных данных.
-    expect(fixtures.postgres.username.length).toBeLessThanOrEqual(64);
+    
+    //expect(fixtures.postgres.username.length).toBeLessThanOrEqual(64);
+    expect(fixtures.postgres.username.length).toBeLessThanOrEqual(5);
     expect(fixtures.postgres.email).toContain('@example.test');
     
     // Пример падения: если ИИ сгенерирует некорректную длину или структуру, этот ассерт завалится
