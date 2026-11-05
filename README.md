@@ -86,6 +86,7 @@ The n8n/ChatGPT workflow and its provider credentials are configured in n8n; the
 | **JavaScript (ES Modules)** | Project language and module system |
 | **GraphQL API** | SpaceX company information query |
 | **PostgreSQL 15 + `pg`** | SQL integration test |
+| **MongoDB (NoSQL)** | Generated nested payload fixtures for disruption tests; a MongoDB server is not currently configured |
 | **Redis 7 + `redis`** | Cache integration test |
 | **RabbitMQ 3 + `amqplib`** | AMQP publish/consume integration test |
 | **Docker Compose** | Local, repeatable infrastructure setup |
