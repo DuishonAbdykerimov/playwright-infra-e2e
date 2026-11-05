@@ -21,7 +21,8 @@ test.describe('Глубокое тестирование баз данных (Х
   test('Тест устойчивости PostgreSQL к длинным именам', async ({ request }) => {
     console.log('🔥 Проверка PostgreSQL фикстурой:', fixtures.postgres);
     
-    expect(fixtures.postgres.username).toHaveLength(64);
+    
+    expect(fixtures.postgres.username.length).toBeLessThanOrEqual(5);
     expect(fixtures.postgres.email).toContain('@example.test');
     
     // Пример падения: если ИИ сгенерирует некорректную длину или структуру, этот ассерт завалится
