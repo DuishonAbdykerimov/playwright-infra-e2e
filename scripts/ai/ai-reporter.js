@@ -1,48 +1,76 @@
 // scripts/ai/ai-reporter.js
 import { OpenAI } from 'openai';
-
-// Инициализируем ИИ напрямую через OpenRouter (доступ к любым LLM: Gemini, GPT-4o)
-const openai = new OpenAI({
-  baseURL: "https://openrouter.ai",
-  apiKey: process.env.OPENROUTER_API_KEY // Ключ будет браться из .env или GitHub Secrets
-});
+import { getOpenRouterApiKey } from './openrouter-config.js';
 
 class AiReporter {
   async onTestEnd(test, result) {
-    // Срабатывает только если тест упал или отвалился по таймауту
     if (result.status === 'failed' || result.status === 'timedOut') {
-      const errorMessage = result.errors.map(e => e.message).join('\n');
-      
-      console.log(`\n🤖 [AI Engine]: Тест "${test.title}" упал! Начинаю прямой анализ логов...`);
-
-      if (!process.env.OPENROUTER_API_KEY) {
-        console.log("❌ [AI Engine]: Ошибка: Переменная OPENROUTER_API_KEY не задана в окружении.");
+      let apiKey;
+      try {
+        apiKey = getOpenRouterApiKey();
+      } catch (error) {
+        console.error(`[AI Engine] ${error.message}`);
         return;
       }
 
+      if (!apiKey) {
+        console.warn('[AI Engine] Set OPENROUTER_API_KEY in .env or the CI secrets to enable AI analysis.');
+        return;
+      }
+
+      const sensitiveValues = [
+        process.env.ECOM_USER_EMAIL,
+        process.env.ECOM_USER_PASSWORD,
+        apiKey,
+      ].filter(Boolean);
+      const redactSensitiveValues = value => sensitiveValues.reduce(
+        (redacted, sensitiveValue) => redacted.split(sensitiveValue).join('[REDACTED]'),
+        value,
+      );
+      const errorMessage = redactSensitiveValues((result.errors ?? [])
+        .map(error => error.message ?? '')
+        .join('\n'));
+
+      console.log(`\n🤖 [AI Engine]: Тест "${redactSensitiveValues(test.title)}" упал! Анализирую ошибку...`);
+
       try {
+        const openai = new OpenAI({
+          baseURL: 'https://openrouter.ai/api/v1',
+          apiKey,
+        });
         const completion = await openai.chat.completions.create({
-          model: "google/gemini-2.5-flash", // Быстрая, точная и ультрадешевая модель для кода
+          model: process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash',
+          max_tokens: 600,
           messages: [
-            { 
-              role: "system", 
-              content: "Ты Senior QA Automation и Архитектор. Изучи ошибку выполнения теста Playwright. Определи корень проблемы (ошибка локатора, баг бэкенда, упал Redis/Postgres, таймаут очереди RabbitMQ). Выведи краткое резюме ошибки и готовый исправленный кусок кода автотеста или бэкенда." 
+            {
+              role: 'system',
+              content: 'Ты Senior QA Automation и архитектор. Проанализируй ошибку Playwright, кратко определи вероятную причину и предложи конкретные шаги диагностики или исправления. Не утверждай, что исправление проверено.',
             },
-            { 
-              role: "user", 
-              content: `Тест: ${test.title}\nФайл: ${test.location.file}\nСтрока: ${test.location.line}\n\nОшибка:\n${errorMessage}` 
-            }
+            {
+              role: 'user',
+              content: `Тест: ${test.title}\nФайл: ${test.location.file}\nСтрока: ${test.location.line}\n\nОшибка:\n${errorMessage}`,
+            },
           ],
         });
 
-        console.log('\n======================================================');
-        console.log('✨ [AI Engine] ВЕРДИКТ И ВАРИАНТ ИСПРАВЛЕНИЯ:');
-        console.log('======================================================');
-        console.log(completion.choices.message.content);
-        console.log('======================================================\n');
+        const analysis = completion.choices[0]?.message?.content;
+        if (!analysis) {
+          const finishReason = completion.choices[0]?.finish_reason ?? 'unknown';
+          throw new Error(`The AI provider returned no analysis (finish_reason: ${finishReason}).`);
+        }
 
+        console.log('\n======================================================');
+        console.log('✨ [AI Engine] АНАЛИЗ ОШИБКИ:');
+        console.log('======================================================');
+        console.log(redactSensitiveValues(analysis));
+        console.log('======================================================\n');
       } catch (error) {
-        console.error('❌ [AI Engine]: Не удалось достучаться до API ИИ:', error.message);
+        const details = [
+          error.status ? `HTTP ${error.status}` : null,
+          error.code ? `code ${error.code}` : null,
+          error.message,
+        ].filter(Boolean).join(' — ');
+        console.error('[AI Engine] Could not analyze the test failure:', redactSensitiveValues(details));
       }
     }
   }

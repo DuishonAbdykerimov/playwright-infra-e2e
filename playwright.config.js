@@ -1,4 +1,5 @@
 // playwright.config.js
+import 'dotenv/config';
 import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
@@ -8,8 +9,10 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   workers: process.env.CI ? 1 : undefined,
   reporter: [
+    ['list'],
     ['html'],
     ['allure-playwright', { outputFolder: 'allure-results' }],
+    ['./scripts/ai/ai-reporter.js'],
   ],
 
   use: {
@@ -27,9 +30,4 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
     },
   ],
-    reporter: [
-    ['list'], // Чтобы видеть стандартный прогресс тестов в консоли
-    ['./scripts/ai/ai-reporter.js'] // Наш автономный ИИ-анализатор логов
-  ],
-
 });

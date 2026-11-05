@@ -54,6 +54,8 @@ The infrastructure services and the Playwright test runner can run together thro
 
 The API/browser scenario requires a valid demo-app account, provided through `ECOM_USER_EMAIL` and `ECOM_USER_PASSWORD`. Credentials are not committed to the repository.
 
+The optional direct AI failure reporter uses an OpenRouter API key from `OPENROUTER_API_KEY`. Set it in `.env` for local runs or as a GitHub Actions secret for CI. If the key is not configured, Playwright tests still run normally and only the direct AI analysis is skipped.
+
 GitHub Actions builds and runs the Playwright container with Docker Compose, which starts PostgreSQL, Redis, and RabbitMQ and waits for their health checks. The workflow runs on pushes and pull requests to `main`/`master`, and can also be started manually with **Actions → Playwright Tests → Run workflow**. The API/browser scenario is reported as skipped when its credentials are not configured; add `ECOM_USER_EMAIL` and `ECOM_USER_PASSWORD` under **Repository Settings → Secrets and variables → Actions** to enable it in CI.
 
 ## 🤖 CI failure triage
@@ -167,14 +169,17 @@ Copy the example environment file:
 cp .env.example .env
 ```
 
-Add your demo-app credentials to `.env`:
+Add your demo-app credentials to `.env`. To enable direct AI analysis when a test fails, also set an OpenRouter key:
 
 ```dotenv
 ECOM_USER_EMAIL=your-demo-account-email
 ECOM_USER_PASSWORD=your-demo-account-password
+OPENROUTER_API_KEY=your-openrouter-api-key
 ```
 
-Export the variables into the current shell before running the tests:
+The Playwright configuration and the standalone AI fixture script load `.env` automatically for local runs. In GitHub Actions, configure `ECOM_USER_EMAIL`, `ECOM_USER_PASSWORD`, and, optionally, `OPENROUTER_API_KEY` as repository Actions secrets. Without the account credentials the API/browser test is skipped; without the OpenRouter key, tests still run and only direct AI analysis is skipped.
+
+If you need the variables in other shell commands, export them with:
 
 ```bash
 set -a
@@ -182,9 +187,7 @@ source .env
 set +a
 ```
 
-`.env` is ignored by Git. Never commit real credentials. The API/browser test is skipped if either variable is missing.
-
-In GitHub Actions, the API/browser test is skipped if its credentials are not configured. To enable it, add repository Actions secrets named `ECOM_USER_EMAIL` and `ECOM_USER_PASSWORD`.
+`.env` is ignored by Git. Never commit real credentials.
 
 ### 3. Run the full project in Docker
 
