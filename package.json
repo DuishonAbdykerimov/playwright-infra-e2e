@@ -4,11 +4,10 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-  "test": "npx playwright test",
-  "allure:generate": "npx allure generate allure-results --clean -o allure-report",
-  "allure:open": "npx allure open allure-report"
-},
-
+    "test": "npx playwright test",
+    "allure:generate": "npx allure generate allure-results --clean -o allure-report",
+    "allure:open": "npx allure open allure-report"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
@@ -21,6 +20,7 @@
   },
   "dependencies": {
     "amqplib": "^2.2.0",
+    "openai": "^7.51.0",
     "pg": "^8.23.1",
     "redis": "^6.3.0"
   }

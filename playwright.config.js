@@ -27,4 +27,9 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
     },
   ],
+    reporter: [
+    ['list'], // Чтобы видеть стандартный прогресс тестов в консоли
+    ['./scripts/ai/ai-reporter.js'] // Наш автономный ИИ-анализатор логов
+  ],
+
 });

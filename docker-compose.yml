@@ -62,6 +62,7 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       ECOM_USER_EMAIL: ${ECOM_USER_EMAIL:-}
       ECOM_USER_PASSWORD: ${ECOM_USER_PASSWORD:-}
       POSTGRES_HOST: postgres_db
