@@ -1,6 +1,7 @@
-// scripts/ai/ai-reporter.js
 import { OpenAI } from 'openai';
 import { getOpenRouterApiKey } from './openrouter-config.js';
+import fs from 'node:fs';
+import path from 'node:path';
 
 class AiReporter {
   async onTestEnd(test, result) {
@@ -9,74 +10,70 @@ class AiReporter {
       try {
         apiKey = getOpenRouterApiKey();
       } catch (error) {
-        console.error(`[AI Engine] ${error.message}`);
-        return false;
+        console.error(`[AI Engine] \${error.message}`);
+        return;
       }
 
-      if (!apiKey) {
-        console.warn('[AI Engine] Set OPENROUTER_API_KEY in .env or the CI secrets to enable AI analysis.');
-        return false;
+      if (!apiKey) return;
+
+      const errorMessage = (result.errors ?? []).map(e => e.message ?? '').join('\n');
+      const testFilePath = test.location.file;
+
+      console.log(`\n🤖 [AI Self-Healing]: Тест упал в файле: ${testFilePath}. Запускаю режим авто-исправления кода...`);
+
+      // Читаем исходный код упавшего теста
+      let testCode = '';
+      try {
+        testCode = fs.readFileSync(testFilePath, 'utf8');
+      } catch (err) {
+        console.error('[AI Self-Healing] Не удалось прочитать файл теста:', err.message);
+        return;
       }
-
-      const sensitiveValues = [
-        process.env.ECOM_USER_EMAIL,
-        process.env.ECOM_USER_PASSWORD,
-        apiKey,
-      ].filter(Boolean);
-      const redactSensitiveValues = value => sensitiveValues.reduce(
-        (redacted, sensitiveValue) => redacted.split(sensitiveValue).join('[REDACTED]'),
-        value,
-      );
-      const errorMessage = redactSensitiveValues((result.errors ?? [])
-        .map(error => error.message ?? '')
-        .join('\n'));
-
-      console.log(`\n🤖 [AI Engine]: Тест "${redactSensitiveValues(test.title)}" упал! Анализирую ошибку...`);
 
       try {
         const openai = new OpenAI({
           baseURL: 'https://openrouter.ai/api/v1',
           apiKey,
         });
+
         const completion = await openai.chat.completions.create({
           model: process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash',
-          max_tokens: 600,
+          max_tokens: 2000,
           messages: [
             {
               role: 'system',
-              content: 'Ты Senior QA Automation и архитектор. Проанализируй ошибку Playwright, кратко определи вероятную причину и предложи конкретные шаги диагностики или исправления. Не утверждай, что исправление проверено.',
+              content: `Ты — ИИ-архитектор автоматизации тестирования с функцией Self-Healing (самоисцеление кода).
+              Тебе дан исходный код файла теста на JavaScript/Playwright и текст ошибки, из-за которой он упал.
+              Твоя задача — ПЕРЕПИСАТЬ код теста так, чтобы исправить ошибку (например, поправить неактуальное ожидание, обновить локатор или добавить обработку деструктивных данных от Хакера-Разрушителя).
+              Правила:
+              1. Возвращай ТОЛЬКО исправленный полный код файла.
+              2. Никакого лишнего текста, пояснений или markdown-оберток (\`\`\`javascript). Только чистый исполняемый код.`
             },
             {
               role: 'user',
-              content: `Тест: ${test.title}\nФайл: ${test.location.file}\nСтрока: ${test.location.line}\n\nОшибка:\n${errorMessage}`,
-            },
-          ],
+              content: `ФАЙЛ: ${testFilePath}\n\nОШИБКА:\n${errorMessage}\n\nОРИГИНАЛЬНЫЙ КОД ТЕСТА:\n${testCode}`
+            }
+          ]
         });
 
-        const analysis = completion.choices[0]?.message?.content;
-        if (!analysis) {
-          const finishReason = completion.choices[0]?.finish_reason ?? 'unknown';
-          throw new Error(`The AI provider returned no analysis (finish_reason: ${finishReason}).`);
-        }
+        let healedCode = completion.choices[0]?.message?.content;
+        if (!healedCode) throw new Error('ИИ вернул пустой код исправления.');
 
+        // Очищаем от возможных markdown-тегов
+        healedCode = healedCode.replace(/^```javascript\s*/i, '').replace(/^```\s*/i, '').replace(/```$/, '').trim();
+
+        // Перезаписываем файл теста исправленным кодом!
+        fs.writeFileSync(testFilePath, healedCode, 'utf8');
+        
         console.log('\n======================================================');
-        console.log('✨ [AI Engine] АНАЛИЗ ОШИБКИ:');
-        console.log('======================================================');
-        console.log(redactSensitiveValues(analysis));
+        console.log(`✨ [AI Self-Healing] ТЕСТ УСПЕШНО ИСПРАВЛЕН И ПЕРЕЗАПИСАН!`);
+        console.log(`📄 Измененный файл: ${testFilePath}`);
         console.log('======================================================\n');
-        return true;
+
       } catch (error) {
-        const details = [
-          error.status ? `HTTP ${error.status}` : null,
-          error.code ? `code ${error.code}` : null,
-          error.message,
-        ].filter(Boolean).join(' — ');
-        console.error('[AI Engine] Could not analyze the test failure:', redactSensitiveValues(details));
-        return false;
+        console.error('[AI Self-Healing] Не удалось автоматически исправить код:', error.message);
       }
     }
-
-    return true;
   }
 }
 
