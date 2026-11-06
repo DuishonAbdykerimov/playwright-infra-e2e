@@ -70,16 +70,16 @@ flowchart LR
     Tests -->|fail| Reporter[AI Self-Healing Reporter]
     Reporter -->|Test source + error| LLM[OpenRouter API / Gemini 2.5 Flash]
     LLM -->|Candidate repair| Fix[Update local test file]
-    Fix -->|Syntax check + full suite rerun| Validate{All tests pass?}
+    Fix -->|Full suite rerun| Validate{All tests pass?}
     Validate -->|yes| Branch[Isolated AI repair branch]
     Branch --> PR[Pull Request for review]
     Validate -->|no| Failed[CI remains failed]
     Tests -.->|failure artifacts| Artifacts[Logs, reports, traces]
 ```
 
-After the final Playwright retry fails, `AiReporter` reads the failing JavaScript test and sends its source and error details to the configured OpenRouter model. Configured account credentials and the API key are redacted before the request. The reporter validates the generated JavaScript syntax before replacing a test file under `tests/`.
-
-If a test file changed, GitHub Actions reruns the full Playwright suite. Only when that rerun passes does the workflow create an isolated `ai-self-healing/<run-id>` branch and open a Pull Request for review; AI changes are not pushed directly to `main`. If analysis, syntax validation, or the rerun fails, the workflow remains failed and uploads its logs and test artifacts. MongoDB disruption data is generated as fixtures; this project does not currently run a MongoDB server.
+- **MongoDB Resilience Testing (Хакер-Разрушитель):** The fixture generator creates MongoDB-shaped resilience data for NoSQL operator handling (including `$ne` and `$gt`), type mutations such as an array in `userId`, and deeply nested payloads. These are synthetic test fixtures; the project does not run a MongoDB server or provide the application's backend.
+- **Framework Adaptation & Self-Healing:** When a Playwright test fails, `AiReporter` sends the failing test source and error details to the configured OpenRouter model (Gemini 2.5 Flash by default). Its prompt asks the model to adapt the failing test to dynamic fixture structures—for example, by checking fields before assertions and safely traversing nested objects. The reporter writes the generated code to the failing JavaScript test under `tests/`; it does not modify the external application's backend. Fixture-related `TypeError` or `ENOENT` errors can be included in the repair request when the reporter can still read the test source. If the source test itself cannot be read, the reporter logs the error and stops.
+- **Validation & Pull Request:** When test files change, GitHub Actions reruns the full Playwright suite. If the rerun passes, the workflow creates an isolated `ai-self-healing/<run-id>` branch and opens a Pull Request for review; it does not push the AI repair directly to `main`. Failed repairs leave CI failed, with logs and test artifacts uploaded for diagnosis.
 
 ## 🧱 Technology stack
 
@@ -285,14 +285,11 @@ To also remove the local PostgreSQL volume and its data, use `docker compose dow
 
 ### 🤖 AI-разбор ошибок и автоматическое исправление (Self-Healing)
 
-В GitHub Actions цикл Self-Healing работает без внешних вебхуков и обязательного n8n:
+- **MongoDB Resilience Testing (Хакер-Разрушитель):** Генератор создаёт MongoDB-подобные фикстуры для проверки обработки NoSQL-операторов (включая `$ne` и `$gt`), мутаций типов (например, массив вместо `userId`) и глубоко вложенных payload. Это синтетические тестовые данные: сам MongoDB-сервер и backend приложения в проекте не запускаются.
+- **Framework Adaptation & Self-Healing:** При падении Playwright-теста `AiReporter` отправляет исходный код упавшего теста и сведения об ошибке в настроенную модель OpenRouter (по умолчанию Gemini 2.5 Flash). Промпт просит адаптировать тест к динамической структуре фикстур — например, проверять наличие полей перед ассертами и безопасно обходить вложенные объекты. Репортёр записывает сгенерированный код в упавший JavaScript-тест внутри `tests/`; код внешнего backend приложения он не меняет. Ошибки `TypeError` или `ENOENT`, связанные с фикстурами, могут попасть в запрос на исправление, если исходный файл теста доступен для чтения. Если сам исходник прочитать не удалось, репортёр сообщает об ошибке и прекращает исправление.
+- **Validation & Pull Request:** Если файлы тестов изменились, GitHub Actions повторно запускает весь набор Playwright-тестов. При успешном прогоне workflow создаёт отдельную ветку `ai-self-healing/<run-id>` и Pull Request для проверки; напрямую в `main` ИИ-исправление не отправляется. Если исправление или повторный запуск не прошли, CI остаётся неуспешным, а логи и артефакты загружаются для диагностики.
 
-1. **Перехват сбоя:** после последней неудачной попытки Playwright репортёр `AiReporter` получает ошибку теста.
-2. **Анализ:** репортёр читает исходный код упавшего JavaScript-теста и отправляет его вместе с ошибкой в OpenRouter (по умолчанию Gemini 2.5 Flash). Настроенные учётные данные и API-ключ маскируются перед отправкой.
-3. **Кандидат исправления:** ИИ возвращает полный файл теста. Репортёр проверяет синтаксис и обновляет только файл внутри `tests/`.
-4. **Повторная проверка:** GitHub Actions заново запускает полный набор Playwright-тестов. Если он проходит, workflow создаёт отдельную ветку `ai-self-healing/<run-id>` и открывает Pull Request для проверки; напрямую в `main` исправление не отправляется.
-
-Чтобы включить цикл в GitHub Actions, добавьте `OPENROUTER_API_KEY` в секреты репозитория. Без ключа тесты продолжают запускаться, но AI-анализ и исправление пропускаются. Если исправленный тест или полный повторный прогон не проходит, workflow остаётся неуспешным. Логи и тестовые артефакты загружаются в GitHub Actions. MongoDB в этом проекте представлена генерируемыми фикстурами; отдельный MongoDB-сервер не запускается.
+Чтобы включить цикл в GitHub Actions, добавьте `OPENROUTER_API_KEY` в секреты репозитория. Без ключа тесты продолжают запускаться, но AI-анализ и исправление пропускаются.
 
 ### Быстрый запуск
 

@@ -31,7 +31,7 @@ async function runDisruptionEngine(apiKey) {
       messages: [
         {
           role: 'system',
-          content: 'Сгенерируй один компактный JSON-объект для безопасных MongoDB resilience-тестов в форме {"mongodb":{"nosql_injection":{"username":{"$ne":"guest"}},"type_mutation":{"userId":[]},"malicious_payload":{"data":{"level1":{"level2":"test"}}}}}. Возвращай только валидный JSON, без markdown и текста. Не добавляй поля и не усложняй вложенность.'
+          content: 'Сгенерируй один компактный JSON-объект для безопасных MongoDB resilience-тестов в форме {"mongodb":{"nosql_injection":{"username":{"$ne":"guest"},"password":{"$gt":""}},"type_mutation":{"userId":[]},"malicious_payload":{"data":{"level1":{"level2":"test"}}}}}. Возвращай только валидный JSON, без markdown и текста. Не добавляй поля и не усложняй вложенность.'
         },
         {
           role: 'user',
