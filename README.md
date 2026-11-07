@@ -39,7 +39,7 @@
 
 The infrastructure services and the Playwright test runner can run together through Docker Compose. Playwright Test runs the suite in Chromium, while the HTML and Allure reporters provide test results and debugging evidence.
 
-> **Scope note:** PostgreSQL, Redis, and RabbitMQ are standalone services used by this project's integration tests. They are not represented as internal components of the external demo e-commerce application.
+> **Scope note:** PostgreSQL, Redis, and RabbitMQ are standalone services used by this project's integration tests. Stripe is represented by a local contract fixture, not a live payment integration. These services are not represented as internal components of the external demo e-commerce application.
 
 ## ✨ Test coverage
 
@@ -51,6 +51,10 @@ The infrastructure services and the Playwright test runner can run together thro
 | **Redis** | Writes a mock session value to Redis and verifies it can be read back. |
 | **RabbitMQ** | Publishes a JSON order message to a queue, consumes it, and checks its fields. |
 | **RabbitMQ load test** | Publishes 100 test messages, leaves them available for 15 seconds, then drains the queue. |
+| **RabbitMQ backpressure & DLQ** | Limits queue capacity, publishes beyond the limit, and verifies overflow messages are dead-lettered. |
+| **Stripe contract shape** | Validates required fields and types in a local mock PaymentIntent response; it does not call Stripe. |
+| **Redis chaos engineering** | Stops the local Compose `redis_cache` service, verifies an operation fails, then restores the service and verifies recovery. |
+| **PostgreSQL performance analysis** | A manually run analyzer captures `EXPLAIN ANALYZE` for a sample query and requests an AI interpretation; it is not an automatic production telemetry collector. |
 
 The API/browser scenario requires a valid demo-app account, provided through `ECOM_USER_EMAIL` and `ECOM_USER_PASSWORD`. Credentials are not committed to the repository.
 
@@ -81,6 +85,13 @@ flowchart LR
 - **Framework Adaptation & Self-Healing:** When a Playwright test fails, `AiReporter` sends the failing test source and error details to the configured OpenRouter model (Gemini 2.5 Flash by default). Its prompt asks the model to adapt the failing test to dynamic fixture structures—for example, by checking fields before assertions and safely traversing nested objects. The reporter writes the generated code to the failing JavaScript test under `tests/`; it does not modify the external application's backend. Fixture-related `TypeError` or `ENOENT` errors can be included in the repair request when the reporter can still read the test source. If the source test itself cannot be read, the reporter logs the error and stops.
 - **Validation & Pull Request:** When test files change, GitHub Actions reruns the full Playwright suite. If the rerun passes, the workflow creates an isolated `ai-self-healing/<run-id>` branch and opens a Pull Request for review; it does not push the AI repair directly to `main`. Failed repairs leave CI failed, with logs and test artifacts uploaded for diagnosis.
 
+### Advanced engineering capabilities
+
+- **Advanced Performance & Queue Testing:** [`tests/tests/queue-backpressure.spec.js`](./tests/tests/queue-backpressure.spec.js) bounds a RabbitMQ queue, publishes beyond capacity, and verifies overflow routing to a Dead Letter Queue (DLQ).
+- **Database Performance Analysis:** [`scripts/ai/database-performance-analyzer.js`](./scripts/ai/database-performance-analyzer.js) runs a sample PostgreSQL `EXPLAIN ANALYZE` query and can send its plan to OpenRouter for recommendations. It uses a synthetic plan if the sample table is unavailable; automatic alert-driven collection is not configured.
+- **Stripe Contract Testing:** [`tests/tests/contract-stripe.spec.js`](./tests/tests/contract-stripe.spec.js) validates required fields and types in a representative local mock PaymentIntent response. It does not call Stripe or process payments; failed assertions are handled by the configured Playwright reporter.
+- **Chaos Engineering:** [`tests/tests/chaos-redis.spec.js`](./tests/tests/chaos-redis.spec.js) uses [`chaos-manager.js`](./scripts/ai/database/chaos-manager.js) to stop and restore the local Compose `redis_cache` service, verifying failure behavior and recovery.
+
 ## 🧱 Technology stack
 
 | Technology | How it is used |
@@ -91,10 +102,12 @@ flowchart LR
 | **PostgreSQL 15 + `pg`** | SQL integration test |
 | **MongoDB (NoSQL)** | Generated nested payload fixtures for disruption tests; a MongoDB server is not currently configured |
 | **Redis 7 + `redis`** | Cache integration test |
-| **RabbitMQ 3 + `amqplib`** | AMQP publish/consume integration test |
+| **RabbitMQ 3 + `amqplib`** | AMQP integration, bounded-queue backpressure, and dead-letter routing tests |
+| **Stripe PaymentIntent contract** | Local mock response-shape validation; no live Stripe connection |
 | **Docker Compose** | Local, repeatable infrastructure setup |
 | **GitHub Actions** | Dockerized Playwright CI, AI-assisted test repair validation, and Pull Request creation |
 | **OpenRouter + Gemini 2.5 Flash** | AI test-failure analysis and candidate repair generation |
+| **PostgreSQL `EXPLAIN ANALYZE`** | Manual sample-query plan capture and optional AI interpretation |
 | **n8n** | Optional local automation service; not required for CI self-healing |
 | **Prometheus + Grafana** | RabbitMQ metrics scraping and metrics dashboard service |
 | **Elasticsearch + Kibana** | Local search and data exploration services |
@@ -280,6 +293,10 @@ To also remove the local PostgreSQL volume and its data, use `docker compose dow
 | **Redis** | Запись mock-значения сессии и чтение его обратно. |
 | **RabbitMQ** | Публикация JSON-сообщения, чтение из очереди и проверка полей. |
 | **Нагрузочный тест RabbitMQ** | Публикация 100 тестовых сообщений, ожидание 15 секунд и очистка очереди. |
+| **RabbitMQ backpressure и DLQ** | Проверка ограничения длины очереди и перенаправления вытесненных сообщений в Dead Letter Queue. |
+| **Stripe contract shape** | Проверка полей и типов локального mock-ответа PaymentIntent; запрос к Stripe не выполняется. |
+| **Chaos-тест Redis** | Остановка локального Compose-сервиса `redis_cache`, проверка сбоя и восстановление сервиса. |
+| **Анализ производительности PostgreSQL** | Ручной запуск анализатора с `EXPLAIN ANALYZE` для примерного запроса и необязательной AI-рекомендацией. |
 
 Для API/browser-теста нужны `ECOM_USER_EMAIL` и `ECOM_USER_PASSWORD` — учётные данные demo-приложения. Для AI-разбора и исправления также задайте `OPENROUTER_API_KEY`. Не сохраняйте секреты в Git.
 
@@ -290,6 +307,13 @@ To also remove the local PostgreSQL volume and its data, use `docker compose dow
 - **Validation & Pull Request:** Если файлы тестов изменились, GitHub Actions повторно запускает весь набор Playwright-тестов. При успешном прогоне workflow создаёт отдельную ветку `ai-self-healing/<run-id>` и Pull Request для проверки; напрямую в `main` ИИ-исправление не отправляется. Если исправление или повторный запуск не прошли, CI остаётся неуспешным, а логи и артефакты загружаются для диагностики.
 
 Чтобы включить цикл в GitHub Actions, добавьте `OPENROUTER_API_KEY` в секреты репозитория. Без ключа тесты продолжают запускаться, но AI-анализ и исправление пропускаются.
+
+### Продвинутые инженерные концепции
+
+- **Advanced Performance & Queue Testing:** [`tests/tests/queue-backpressure.spec.js`](./tests/tests/queue-backpressure.spec.js) ограничивает размер очереди RabbitMQ, отправляет сообщений больше лимита и проверяет перенаправление лишних сообщений в Dead Letter Queue (DLQ).
+- **Database Performance Analysis:** [`scripts/ai/database-performance-analyzer.js`](./scripts/ai/database-performance-analyzer.js) выполняет примерный PostgreSQL-запрос с `EXPLAIN ANALYZE` и может отправить план в OpenRouter для рекомендаций. Если тестовая таблица отсутствует, используется синтетический план; автоматический сбор по алертам не настроен.
+- **Stripe Contract Testing:** [`tests/tests/contract-stripe.spec.js`](./tests/tests/contract-stripe.spec.js) проверяет обязательные поля и типы на локальном mock-ответе PaymentIntent. Реальный Stripe API не вызывается, платежи не обрабатываются; при падении теста используется настроенный Playwright reporter.
+- **Chaos Engineering:** [`tests/tests/chaos-redis.spec.js`](./tests/tests/chaos-redis.spec.js) через [`chaos-manager.js`](./scripts/ai/database/chaos-manager.js) останавливает и восстанавливает локальный Compose-сервис `redis_cache`, проверяя поведение при отказе и восстановление.
 
 ### Быстрый запуск
 

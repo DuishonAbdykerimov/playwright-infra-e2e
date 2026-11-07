@@ -2,28 +2,31 @@
 import { createClient } from 'redis';
 
 export class RedisClient {
-    constructor() {
-        // Подключаемся к Redis на стандартный порт 6379, который мы прописали в Докере
+    constructor({ url = process.env.REDIS_URL ?? 'redis://localhost:6379', socket } = {}) {
         this.client = createClient({
-            url: process.env.REDIS_URL ?? 'redis://localhost:6379'
+            url,
+            ...(socket ? { socket } : {}),
         });
 
-        // Обработка ошибок подключения, чтобы тест не вис в случае чего
         this.client.on('error', err => console.error('Redis Client Error', err));
     }
 
-    // Метод для записи значения по ключу (например, сохраняем токен)
     async setKey(key, value) {
-        await this.client.connect();
-        await this.client.set(key, value);
-        await this.client.disconnect();
+        return this.#runWithConnection(() => this.client.set(key, value));
     }
 
-    // Метод для чтения значения по ключу
     async getKey(key) {
-        await this.client.connect();
-        const value = await this.client.get(key);
-        await this.client.disconnect();
-        return value;
+        return this.#runWithConnection(() => this.client.get(key));
+    }
+
+    async #runWithConnection(operation) {
+        try {
+            await this.client.connect();
+            return await operation();
+        } finally {
+            if (this.client.isOpen) {
+                await this.client.disconnect();
+            }
+        }
     }
 }
