@@ -3,7 +3,7 @@ version: '3.8'
 services:
   # 1. Слой Базы Данных (PostgreSQL)
   postgres_db:
-    image: postgres:15-alpine
+    image: pgvector/pgvector:pg15
     container_name: qa_postgres
     environment:
       POSTGRES_USER: qa_user
@@ -66,6 +66,8 @@ services:
       CI: ${CI:-}
       ECOM_USER_EMAIL: ${ECOM_USER_EMAIL:-}
       ECOM_USER_PASSWORD: ${ECOM_USER_PASSWORD:-}
+      PHOENIX_COLLECTOR_ENDPOINT: http://llm_monitor:6006/v1/traces
+      PHOENIX_API_KEY: ${PHOENIX_API_KEY:-}
       POSTGRES_HOST: postgres_db
       POSTGRES_PORT: 5432
       POSTGRES_USER: qa_user
@@ -81,6 +83,8 @@ services:
         condition: service_healthy
       rabbitmq_broker:
         condition: service_healthy
+      llm_monitor:
+        condition: service_started
     volumes:
       - ./tests:/app/tests
       - ./test-data:/app/test-data
@@ -152,8 +156,7 @@ services:
       resources:
         limits:
           memory: 512M
-
-  # 9. Диспетчер автоматизации (n8n)
+# 9. Диспетчер автоматизации (n8n)
   n8n:
     image: docker.n8n.io/n8nio/n8n:latest
     container_name: n8n_infra_e2e
@@ -167,6 +170,17 @@ services:
     networks:
       - infra_e2e_network
     restart: always
+
+  llm_monitor:
+    image: arizephoenix/phoenix:latest
+    container_name: qa_llm_monitor
+    ports:
+      - "6006:6006"
+    environment:
+      PHOENIX_PORT: 6006
+      PHOENIX_HOST: 0.0.0.0
+    networks:
+      - infra_e2e_network
 
 volumes:
   n8n_data:
