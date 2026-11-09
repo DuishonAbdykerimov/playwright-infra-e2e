@@ -72,13 +72,24 @@ flowchart LR
     Actions --> Tests[Docker Compose + Playwright]
     Tests -->|pass| Green[Successful CI run]
     Tests -->|fail| Reporter[AI Self-Healing Reporter]
-    Reporter -->|Test source + error| LLM[OpenRouter API / Gemini 2.5 Flash]
-    LLM -->|Candidate repair| Fix[Update local test file]
+    Reporter -->|Error embedding| Embeddings[OpenRouter / Gemini Embedding]
+    Embeddings -->|768 dimensions| Search[PostgreSQL 15 + pgvector<br/>cosine search]
+    Search -->|Relevant context| QA[Agent 1: QA Analyst<br/>Root-cause analysis]
+    QA -->|QA report| Developer[Agent 2: Senior Developer<br/>Candidate patch]
+    Developer -->|Candidate code| Security[Agent 3: Security & Compliance<br/>Security and syntax review]
+    Security -->|Validated candidate| Fix[Update local test file]
     Fix -->|Full suite rerun| Validate{All tests pass?}
     Validate -->|yes| Branch[Isolated AI repair branch]
     Branch --> PR[Pull Request for review]
     Validate -->|no| Failed[CI remains failed]
     Tests -.->|failure artifacts| Artifacts[Logs, reports, traces]
+    QA -.->|Token usage and estimated cost| Console[LLMOps console summary]
+    Developer -.-> Console
+    Security -.-> Console
+    OpenRouter[OpenRouter API] -.->|OTLP tracing not configured| Phoenix[Arize Phoenix<br/>Docker Compose :6006]
+    QA -.-> OpenRouter
+    Developer -.-> OpenRouter
+    Security -.-> OpenRouter
 ```
 
 - **MongoDB Resilience Testing (Хакер-Разрушитель):** The fixture generator creates MongoDB-shaped resilience data for NoSQL operator handling (including `$ne` and `$gt`), type mutations such as an array in `userId`, and deeply nested payloads. These are synthetic test fixtures; the project does not run a MongoDB server or provide the application's backend.
@@ -91,6 +102,13 @@ flowchart LR
 - **Database Performance Analysis:** [`scripts/ai/database-performance-analyzer.js`](./scripts/ai/database-performance-analyzer.js) runs a sample PostgreSQL `EXPLAIN ANALYZE` query and can send its plan to OpenRouter for recommendations. It uses a synthetic plan if the sample table is unavailable; automatic alert-driven collection is not configured.
 - **Stripe Contract Testing:** [`tests/tests/contract-stripe.spec.js`](./tests/tests/contract-stripe.spec.js) validates required fields and types in a representative local mock PaymentIntent response. It does not call Stripe or process payments; failed assertions are handled by the configured Playwright reporter.
 - **Chaos Engineering:** [`tests/tests/chaos-redis.spec.js`](./tests/tests/chaos-redis.spec.js) uses [`chaos-manager.js`](./scripts/ai/database/chaos-manager.js) to stop and restore the local Compose `redis_cache` service, verifying failure behavior and recovery.
+
+## 🤖 Next-Gen AI & LLMOps Architecture
+
+- **Three-agent orchestration:** On a failed test, the `AiReporter` coordinates three OpenRouter calls with separate responsibilities: **QA Analyst** identifies the root cause, **Senior Developer** drafts a test-file repair, and **Security & Compliance Auditor** reviews the candidate for unsafe patterns, exposed secrets, and syntax before it is written.
+- **Local vector RAG with PostgreSQL and pgvector:** No external vector-database service is used. The PostgreSQL 15 Compose image includes `pgvector`; [`scripts/ai/rag-initializer.js`](./scripts/ai/rag-initializer.js) embeds project documentation as 768-dimensional vectors with `google/gemini-embedding-001` and stores them in `knowledge_base`. On a test failure, the reporter embeds the error, retrieves the nearest chunk by cosine distance (`<=>`), and adds that context to the QA Analyst and Senior Developer prompts.
+- **LLMOps token and cost summary:** The reporter logs each agent's OpenRouter `prompt_tokens`, `completion_tokens`, and `total_tokens`, then prints a `📊 [LLMOps Monitor]` summary with an estimated Gemini 2.5 Flash cost. The estimate uses approximate input/output rates and covers the three chat completions; it is not a billing record and does not include embedding usage.
+- **Arize Phoenix status:** Docker Compose provides the Phoenix UI at [http://localhost:6006](http://localhost:6006). The current reporter does **not** export OpenTelemetry spans or Playwright traces to Phoenix, so the dashboard does not yet show these agent runs. Playwright failure traces remain local under `test-results/`; OTLP instrumentation is a future integration.
 
 ## 🧱 Technology stack
 
@@ -107,6 +125,8 @@ flowchart LR
 | **Docker Compose** | Local, repeatable infrastructure setup |
 | **GitHub Actions** | Dockerized Playwright CI, AI-assisted test repair validation, and Pull Request creation |
 | **OpenRouter + Gemini 2.5 Flash** | AI test-failure analysis and candidate repair generation |
+| **Gemini Embedding + PostgreSQL `pgvector`** | Local semantic search over project documentation for RAG context |
+| **Arize Phoenix** | Local LLMOps UI service; trace export from the reporter is not yet configured |
 | **PostgreSQL `EXPLAIN ANALYZE`** | Manual sample-query plan capture and optional AI interpretation |
 | **n8n** | Optional local automation service; not required for CI self-healing |
 | **Prometheus + Grafana** | RabbitMQ metrics scraping and metrics dashboard service |
@@ -126,6 +146,7 @@ Docker Compose also starts Prometheus, Grafana, Elasticsearch, and Kibana:
 | Grafana | [http://localhost:3000](http://localhost:3000) (default local login: `admin` / `admin`) |
 | Elasticsearch | [http://localhost:9200](http://localhost:9200) |
 | Kibana | [http://localhost:5601](http://localhost:5601) |
+| Arize Phoenix | [http://localhost:6006](http://localhost:6006) (UI service; AI trace export is not connected yet) |
 
 Prometheus uses `monitoring/prometheus.yml` to scrape the RabbitMQ metrics endpoint on port `15692`. Run the load-test spec independently with `npx playwright test tests/queue-load-test.spec.js`; RabbitMQ must be running. The test publishes 100 sample messages to its own queue, waits 15 seconds, then drains that queue without interfering with the RabbitMQ integration test.
 
@@ -315,6 +336,13 @@ To also remove the local PostgreSQL volume and its data, use `docker compose dow
 - **Stripe Contract Testing:** [`tests/tests/contract-stripe.spec.js`](./tests/tests/contract-stripe.spec.js) проверяет обязательные поля и типы на локальном mock-ответе PaymentIntent. Реальный Stripe API не вызывается, платежи не обрабатываются; при падении теста используется настроенный Playwright reporter.
 - **Chaos Engineering:** [`tests/tests/chaos-redis.spec.js`](./tests/tests/chaos-redis.spec.js) через [`chaos-manager.js`](./scripts/ai/database/chaos-manager.js) останавливает и восстанавливает локальный Compose-сервис `redis_cache`, проверяя поведение при отказе и восстановление.
 
+### 🤖 Next-Gen AI и LLMOps-архитектура
+
+- **Мультиагентная оркестрация:** При падении теста `AiReporter` запускает три последовательных вызова OpenRouter с разделением ответственности: **QA Analyst** находит первопричину, **Senior Developer** готовит исправление теста, **Security & Compliance Auditor** проверяет кандидат на небезопасные конструкции, утечку секретов и синтаксические ошибки перед записью файла.
+- **Локальный векторный RAG на PostgreSQL и pgvector:** Для хранения векторов не используется отдельная платная внешняя база. Образ PostgreSQL 15 в Docker Compose содержит `pgvector`; [`scripts/ai/rag-initializer.js`](./scripts/ai/rag-initializer.js) формирует для документации 768-мерные эмбеддинги `google/gemini-embedding-001` и сохраняет их в `knowledge_base`. При падении теста система векторизует ошибку, ищет ближайший фрагмент по косинусному расстоянию (`<=>`) и добавляет найденный контекст в запросы QA Analyst и Senior Developer.
+- **LLMOps: токены и оценка стоимости:** Репортёр выводит для каждого агента `prompt_tokens`, `completion_tokens` и `total_tokens`, а затем печатает сводку `📊 [LLMOps Monitor]` с оценкой стоимости по примерным тарифам Gemini 2.5 Flash. Это оценка для трёх текстовых completion-вызовов, а не биллинг; использование токенов на embeddings в неё не входит.
+- **Статус Arize Phoenix:** Docker Compose запускает UI Phoenix на [http://localhost:6006](http://localhost:6006). Сейчас `ai-reporter.js` **не экспортирует OpenTelemetry spans или Playwright traces в Phoenix**, поэтому прогоны агентов в дашборде не отображаются. Playwright trace при падении сохраняется локально в `test-results/`; подключение OTLP остаётся будущей интеграцией.
+
 ### Быстрый запуск
 
 Нужны Node.js LTS, Docker Compose и учётная запись demo-приложения.
@@ -348,6 +376,7 @@ Docker Compose также запускает Prometheus, Grafana, Elasticsearch 
 | Grafana | [http://localhost:3000](http://localhost:3000) (локальный вход по умолчанию: `admin` / `admin`) |
 | Elasticsearch | [http://localhost:9200](http://localhost:9200) |
 | Kibana | [http://localhost:5601](http://localhost:5601) |
+| Arize Phoenix | [http://localhost:6006](http://localhost:6006) (UI доступен, экспорт AI-трейсов пока не подключён) |
 
 Prometheus использует `monitoring/prometheus.yml` для сбора метрик RabbitMQ через порт `15692`. Нагрузочный тест можно запустить отдельно командой `npx playwright test tests/queue-load-test.spec.js`; для него должен быть запущен RabbitMQ. Тест публикует 100 примеров сообщений в отдельную очередь, ждёт 15 секунд и затем очищает её, не мешая обычному RabbitMQ-тесту.
 
