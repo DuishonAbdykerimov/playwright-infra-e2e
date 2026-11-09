@@ -86,7 +86,7 @@ flowchart LR
     QA -.->|Token usage and estimated cost| Console[LLMOps console summary]
     Developer -.-> Console
     Security -.-> Console
-    OpenRouter[OpenRouter API] -.->|OTLP tracing not configured| Phoenix[Arize Phoenix<br/>Docker Compose :6006]
+    OpenRouter[OpenRouter API] -.->|OpenInference spans over OTLP| Phoenix[Arize Phoenix<br/>Docker Compose :6006]
     QA -.-> OpenRouter
     Developer -.-> OpenRouter
     Security -.-> OpenRouter
@@ -108,7 +108,7 @@ flowchart LR
 - **Three-agent orchestration:** On a failed test, the `AiReporter` coordinates three OpenRouter calls with separate responsibilities: **QA Analyst** identifies the root cause, **Senior Developer** drafts a test-file repair, and **Security & Compliance Auditor** reviews the candidate for unsafe patterns, exposed secrets, and syntax before it is written.
 - **Local vector RAG with PostgreSQL and pgvector:** No external vector-database service is used. The PostgreSQL 15 Compose image includes `pgvector`; [`scripts/ai/rag-initializer.js`](./scripts/ai/rag-initializer.js) embeds project documentation as 768-dimensional vectors with `google/gemini-embedding-001` and stores them in `knowledge_base`. On a test failure, the reporter embeds the error, retrieves the nearest chunk by cosine distance (`<=>`), and adds that context to the QA Analyst and Senior Developer prompts.
 - **LLMOps token and cost summary:** The reporter logs each agent's OpenRouter `prompt_tokens`, `completion_tokens`, and `total_tokens`, then prints a `📊 [LLMOps Monitor]` summary with an estimated Gemini 2.5 Flash cost. The estimate uses approximate input/output rates and covers the three chat completions; it is not a billing record and does not include embedding usage.
-- **Arize Phoenix status:** Docker Compose provides the Phoenix UI at [http://localhost:6006](http://localhost:6006). The current reporter does **not** export OpenTelemetry spans or Playwright traces to Phoenix, so the dashboard does not yet show these agent runs. Playwright failure traces remain local under `test-results/`; OTLP instrumentation is a future integration.
+- **Arize Phoenix tracing:** Docker Compose provides the Phoenix UI at [http://localhost:6006](http://localhost:6006). The reporter exports OpenInference-compatible spans for the three AI-agent chat calls over OTLP, including model and token counts; prompts and responses are not included. If Phoenix authentication is enabled, set `PHOENIX_API_KEY` in `.env`. Playwright failure traces remain local under `test-results/` and are not uploaded to Phoenix.
 
 ## 🧱 Technology stack
 
@@ -126,7 +126,7 @@ flowchart LR
 | **GitHub Actions** | Dockerized Playwright CI, AI-assisted test repair validation, and Pull Request creation |
 | **OpenRouter + Gemini 2.5 Flash** | AI test-failure analysis and candidate repair generation |
 | **Gemini Embedding + PostgreSQL `pgvector`** | Local semantic search over project documentation for RAG context |
-| **Arize Phoenix** | Local LLMOps UI service; trace export from the reporter is not yet configured |
+| **Arize Phoenix** | Local LLMOps UI and OTLP destination for masked OpenInference spans |
 | **PostgreSQL `EXPLAIN ANALYZE`** | Manual sample-query plan capture and optional AI interpretation |
 | **n8n** | Optional local automation service; not required for CI self-healing |
 | **Prometheus + Grafana** | RabbitMQ metrics scraping and metrics dashboard service |
@@ -146,7 +146,7 @@ Docker Compose also starts Prometheus, Grafana, Elasticsearch, and Kibana:
 | Grafana | [http://localhost:3000](http://localhost:3000) (default local login: `admin` / `admin`) |
 | Elasticsearch | [http://localhost:9200](http://localhost:9200) |
 | Kibana | [http://localhost:5601](http://localhost:5601) |
-| Arize Phoenix | [http://localhost:6006](http://localhost:6006) (UI service; AI trace export is not connected yet) |
+| Arize Phoenix | [http://localhost:6006](http://localhost:6006) |
 
 Prometheus uses `monitoring/prometheus.yml` to scrape the RabbitMQ metrics endpoint on port `15692`. Run the load-test spec independently with `npx playwright test tests/queue-load-test.spec.js`; RabbitMQ must be running. The test publishes 100 sample messages to its own queue, waits 15 seconds, then drains that queue without interfering with the RabbitMQ integration test.
 
@@ -213,9 +213,10 @@ Add your demo-app credentials to `.env`. To enable direct AI analysis when a tes
 ECOM_USER_EMAIL=your-demo-account-email
 ECOM_USER_PASSWORD=your-demo-account-password
 OPENROUTER_API_KEY=your-openrouter-api-key
+PHOENIX_API_KEY=your-phoenix-system-api-key # only if Phoenix authentication is enabled
 ```
 
-The Playwright configuration and the standalone AI fixture script load `.env` automatically for local runs. In GitHub Actions, configure `ECOM_USER_EMAIL`, `ECOM_USER_PASSWORD`, and, optionally, `OPENROUTER_API_KEY` as repository Actions secrets. Without the account credentials the API/browser test is skipped; without the OpenRouter key, tests still run and only direct AI analysis is skipped.
+The Playwright configuration and the standalone AI fixture script load `.env` automatically for local runs. In GitHub Actions, configure `ECOM_USER_EMAIL`, `ECOM_USER_PASSWORD`, and, optionally, `OPENROUTER_API_KEY` and `PHOENIX_API_KEY` as repository Actions secrets. Without the account credentials the API/browser test is skipped; without the OpenRouter key, tests still run and only direct AI analysis is skipped. `PHOENIX_API_KEY` is only needed when the Phoenix server requires authentication.
 
 If you need the variables in other shell commands, export them with:
 
@@ -319,7 +320,7 @@ To also remove the local PostgreSQL volume and its data, use `docker compose dow
 | **Chaos-тест Redis** | Остановка локального Compose-сервиса `redis_cache`, проверка сбоя и восстановление сервиса. |
 | **Анализ производительности PostgreSQL** | Ручной запуск анализатора с `EXPLAIN ANALYZE` для примерного запроса и необязательной AI-рекомендацией. |
 
-Для API/browser-теста нужны `ECOM_USER_EMAIL` и `ECOM_USER_PASSWORD` — учётные данные demo-приложения. Для AI-разбора и исправления также задайте `OPENROUTER_API_KEY`. Не сохраняйте секреты в Git.
+Для API/browser-теста нужны `ECOM_USER_EMAIL` и `ECOM_USER_PASSWORD` — учётные данные demo-приложения. Для AI-разбора и исправления также задайте `OPENROUTER_API_KEY`. Если Phoenix требует аутентификацию, задайте `PHOENIX_API_KEY` из настроек Phoenix. Не сохраняйте реальные ключи в Git.
 
 ### 🤖 AI-разбор ошибок и автоматическое исправление (Self-Healing)
 
@@ -341,7 +342,7 @@ To also remove the local PostgreSQL volume and its data, use `docker compose dow
 - **Мультиагентная оркестрация:** При падении теста `AiReporter` запускает три последовательных вызова OpenRouter с разделением ответственности: **QA Analyst** находит первопричину, **Senior Developer** готовит исправление теста, **Security & Compliance Auditor** проверяет кандидат на небезопасные конструкции, утечку секретов и синтаксические ошибки перед записью файла.
 - **Локальный векторный RAG на PostgreSQL и pgvector:** Для хранения векторов не используется отдельная платная внешняя база. Образ PostgreSQL 15 в Docker Compose содержит `pgvector`; [`scripts/ai/rag-initializer.js`](./scripts/ai/rag-initializer.js) формирует для документации 768-мерные эмбеддинги `google/gemini-embedding-001` и сохраняет их в `knowledge_base`. При падении теста система векторизует ошибку, ищет ближайший фрагмент по косинусному расстоянию (`<=>`) и добавляет найденный контекст в запросы QA Analyst и Senior Developer.
 - **LLMOps: токены и оценка стоимости:** Репортёр выводит для каждого агента `prompt_tokens`, `completion_tokens` и `total_tokens`, а затем печатает сводку `📊 [LLMOps Monitor]` с оценкой стоимости по примерным тарифам Gemini 2.5 Flash. Это оценка для трёх текстовых completion-вызовов, а не биллинг; использование токенов на embeddings в неё не входит.
-- **Статус Arize Phoenix:** Docker Compose запускает UI Phoenix на [http://localhost:6006](http://localhost:6006). Сейчас `ai-reporter.js` **не экспортирует OpenTelemetry spans или Playwright traces в Phoenix**, поэтому прогоны агентов в дашборде не отображаются. Playwright trace при падении сохраняется локально в `test-results/`; подключение OTLP остаётся будущей интеграцией.
+- **Трейсинг Arize Phoenix:** Docker Compose запускает UI Phoenix на [http://localhost:6006](http://localhost:6006). Репортёр отправляет по OTLP OpenInference-совместимые spans трёх вызовов ИИ-агентов с моделью и числом токенов; prompt и ответы в трейс не включаются. Если в Phoenix включена аутентификация, задайте `PHOENIX_API_KEY` в `.env`. Playwright trace при падении остаётся локально в `test-results/` и в Phoenix не загружается.
 
 ### Быстрый запуск
 
@@ -376,7 +377,7 @@ Docker Compose также запускает Prometheus, Grafana, Elasticsearch 
 | Grafana | [http://localhost:3000](http://localhost:3000) (локальный вход по умолчанию: `admin` / `admin`) |
 | Elasticsearch | [http://localhost:9200](http://localhost:9200) |
 | Kibana | [http://localhost:5601](http://localhost:5601) |
-| Arize Phoenix | [http://localhost:6006](http://localhost:6006) (UI доступен, экспорт AI-трейсов пока не подключён) |
+| Arize Phoenix | [http://localhost:6006](http://localhost:6006) |
 
 Prometheus использует `monitoring/prometheus.yml` для сбора метрик RabbitMQ через порт `15692`. Нагрузочный тест можно запустить отдельно командой `npx playwright test tests/queue-load-test.spec.js`; для него должен быть запущен RabbitMQ. Тест публикует 100 примеров сообщений в отдельную очередь, ждёт 15 секунд и затем очищает её, не мешая обычному RabbitMQ-тесту.
 

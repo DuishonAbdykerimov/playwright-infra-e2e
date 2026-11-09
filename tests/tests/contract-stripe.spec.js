@@ -6,45 +6,37 @@ test.describe('Contract Testing: Верификация API-контракта �
     console.log('💳 Запуск контрактного тестирования для Stripe API...');
 
     const mockStripeResponse = {
-      id: "pi_3Mtw76LkdIwHu7ix28aZIn7b",
+      id: "pi_test_placeholder",
       object: "payment_intent",
       amount: 4990,
       currency: "usd",
       status: "succeeded",
-      client_secret: "pi_3Mtw76_secret_xFgh672"
+      client_secret: "pi_test_secret_placeholder"
     };
 
     console.log('🔍 Проверка полей ответа на соответствие интеграционному контракту...');
 
-    // Проверяем наличие и тип ключевых полей, чтобы избежать ошибок при их отсутствии
     const validateField = (obj, fieldName, expectedType, validationFn = null) => {
       expect(obj).toHaveProperty(fieldName);
-      expect(typeof obj[fieldName]).toBe(expectedType);
+      expect(typeof obj[fieldName]).toBe(expectedType, `Ошибка: Неверный тип для поля '${fieldName}'. Ожидался '${expectedType}', получен '${typeof obj[fieldName]}'.`);
       if (validationFn) {
-        expect(validationFn(obj[fieldName])).toBe(true);
+        expect(validationFn(obj[fieldName])).toBe(true, `Ошибка: Значение поля '${fieldName}' не прошло дополнительную валидацию.`);
       }
     };
 
-    // 1. ID транзакции
-    validateField(mockStripeResponse, 'id', 'string', (val) => val.startsWith('pi_'));
+    validateField(mockStripeResponse, 'id', 'string', value => value.startsWith('pi_'));
+    validateField(mockStripeResponse, 'object', 'string', value => value === 'payment_intent');
+    validateField(mockStripeResponse, 'amount', 'number', value => Number.isInteger(value) && value > 0);
+    validateField(mockStripeResponse, 'currency', 'string', value => /^[a-z]{3}$/.test(value));
+    validateField(
+      mockStripeResponse,
+      'status',
+      'string',
+      value => ['succeeded', 'requires_payment_method', 'processing'].includes(value),
+    );
+    validateField(mockStripeResponse, 'client_secret', 'string', value => value.startsWith('pi_test_secret_'));
 
-    // 2. Сумма платежа (amount)
-    validateField(mockStripeResponse, 'amount', 'number', (val) => Number.isInteger(val) && val > 0);
-
-    // 3. Валюта (currency)
-    validateField(mockStripeResponse, 'currency', 'string', (val) => /^[a-z]{3}$/.test(val));
-
-    // ЛОВУШКА ДЛЯ ИИ-САМОИСЦЕЛЕНИЯ (Контракт нарушен!):
-    // Адаптируем проверку статуса, чтобы быть устойчивым к различиям в регистре.
-    // Если поле status существует, приводим его к верхнему регистру перед сравнением.
-    if (mockStripeResponse && typeof mockStripeResponse.status === 'string') {
-      expect(mockStripeResponse.status.toUpperCase()).toBe('SUCCEEDED');
-    } else {
-      // Если поле 'status' отсутствует или не является строкой, считаем это нарушением контракта.
-      // В зависимости от требований, можно бросить ошибку или установить дефолтный статус.
-      // Для Self-Healing лучше явно зафиксировать ожидание и адаптироваться.
-      expect(false).toBe(true); // Заставляем тест упасть, если статус не соответствует ожиданиям по типу/наличию
-    }
+    expect(mockStripeResponse.status).toBe('succeeded');
 
     console.log('✅ Контракт Stripe API полностью соответствует спецификации!');
   });

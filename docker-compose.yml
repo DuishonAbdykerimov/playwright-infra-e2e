@@ -66,6 +66,8 @@ services:
       CI: ${CI:-}
       ECOM_USER_EMAIL: ${ECOM_USER_EMAIL:-}
       ECOM_USER_PASSWORD: ${ECOM_USER_PASSWORD:-}
+      PHOENIX_COLLECTOR_ENDPOINT: http://llm_monitor:6006/v1/traces
+      PHOENIX_API_KEY: ${PHOENIX_API_KEY:-}
       POSTGRES_HOST: postgres_db
       POSTGRES_PORT: 5432
       POSTGRES_USER: qa_user
@@ -81,6 +83,8 @@ services:
         condition: service_healthy
       rabbitmq_broker:
         condition: service_healthy
+      llm_monitor:
+        condition: service_started
     volumes:
       - ./tests:/app/tests
       - ./test-data:/app/test-data

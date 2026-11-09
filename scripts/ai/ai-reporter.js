@@ -2,9 +2,24 @@ import { OpenAI } from 'openai';
 import { Client } from 'pg';
 import { getOpenRouterApiKey } from './openrouter-config.js';
 import fs from 'node:fs';
-import path from 'node:path';
+import { diag, DiagConsoleLogger, DiagLogLevel, SpanKind, SpanStatusCode, trace } from '@opentelemetry/api';
+import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
+import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-proto';
+import { SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 
 const EMBEDDING_DIMENSIONS = 768;
+
+diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.ERROR);
+
+const phoenixApiKey = process.env.PHOENIX_API_KEY;
+const exporter = new OTLPTraceExporter({
+  url: process.env.PHOENIX_COLLECTOR_ENDPOINT || 'http://localhost:6006/v1/traces',
+  headers: phoenixApiKey ? { Authorization: `Bearer ${phoenixApiKey}` } : undefined,
+});
+const provider = new NodeTracerProvider();
+provider.addSpanProcessor(new SimpleSpanProcessor(exporter));
+provider.register();
+const tracer = trace.getTracer('playwright-ai-reporter');
 
 function recordCompletion(usage, agent, completion) {
   const responseUsage = completion.usage;
@@ -53,13 +68,36 @@ function logLlmOpsSummary(usage, modelName) {
 }
 
 async function retrieveProjectContext(openai, errorMessage) {
-  const embeddingResponse = await openai.embeddings.create({
-    model: process.env.OPENROUTER_EMBEDDING_MODEL || 'google/gemini-embedding-001',
-    input: errorMessage,
-    dimensions: EMBEDDING_DIMENSIONS,
+  const embeddingResponse = await tracer.startActiveSpan('RAG query embedding', {
+    kind: SpanKind.CLIENT,
+    attributes: {
+      'openinference.span.kind': 'EMBEDDING',
+      'llm.provider': 'openrouter',
+      'llm.system': 'openai',
+      'embedding.model_name': process.env.OPENROUTER_EMBEDDING_MODEL || 'google/gemini-embedding-001',
+    },
+  }, async span => {
+    try {
+      const response = await openai.embeddings.create({
+        model: process.env.OPENROUTER_EMBEDDING_MODEL || 'google/gemini-embedding-001',
+        input: errorMessage,
+        dimensions: EMBEDDING_DIMENSIONS,
+      });
+      if (Number.isSafeInteger(response.usage?.prompt_tokens)) {
+        span.setAttribute('llm.token_count.prompt', response.usage.prompt_tokens);
+      }
+      span.setStatus({ code: SpanStatusCode.OK });
+      return response;
+    } catch (error) {
+      span.setAttribute('error.type', error instanceof Error ? error.name : typeof error);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: 'LLM request failed' });
+      throw error;
+    } finally {
+      span.end();
+    }
   });
-  const embedding = embeddingResponse.data?.[0]?.embedding;
 
+  const embedding = embeddingResponse.data?.[0]?.embedding;
   if (!embedding || embedding.length !== EMBEDDING_DIMENSIONS
     || embedding.some(value => !Number.isFinite(value))) {
     throw new Error(`RAG embedding must contain ${EMBEDDING_DIMENSIONS} finite dimensions.`);
@@ -80,13 +118,45 @@ async function retrieveProjectContext(openai, errorMessage) {
       [`[${embedding.join(',')}]`],
     );
     const context = result.rows[0]?.content;
-    if (!context) {
-      throw new Error('No matching context found in the knowledge_base table.');
-    }
+    if (!context) throw new Error('No matching context found in the knowledge_base table.');
     return context;
   } finally {
     await client.end();
   }
+}
+
+async function createTracedCompletion(agent, modelName, request) {
+  return tracer.startActiveSpan(`LLM ${agent}`, {
+    kind: SpanKind.CLIENT,
+    attributes: {
+      'openinference.span.kind': 'LLM',
+      'llm.provider': 'openrouter',
+      'llm.system': 'openai',
+      'llm.model_name': modelName,
+    },
+  }, async span => {
+    try {
+      const completion = await request();
+      const usage = completion.usage;
+      const tokenCounts = {
+        'llm.token_count.prompt': usage?.prompt_tokens,
+        'llm.token_count.completion': usage?.completion_tokens,
+        'llm.token_count.total': usage?.total_tokens,
+      };
+
+      for (const [attribute, count] of Object.entries(tokenCounts)) {
+        if (Number.isSafeInteger(count)) span.setAttribute(attribute, count);
+      }
+      span.setStatus({ code: SpanStatusCode.OK });
+      return completion;
+    } catch (error) {
+      span.setAttribute('error.type', error instanceof Error ? error.name : typeof error);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: 'LLM request failed' });
+      throw error;
+    } finally {
+      span.end();
+    }
+  });
 }
 
 class AiReporter {
@@ -137,85 +207,98 @@ class AiReporter {
           console.log('📚 [RAG]: Релевантный контекст найден.');
 
           // ===================================================
-          // 🕵️‍♂️ АГЕНТ 1: QA Analyst Agent (Технический Анализ)
-          // ===================================================
+        // 🕵️‍♂️ АГЕНТ 1: QA Analyst Agent (Технический Анализ)
+        // ===================================================
           console.log(`\n🕵️‍♂️ [Агент 1 - QA Analyst]: Изучаю логи Playwright и локализую причину сбоя...`);
 
-          const qaAnalystResponse = await openai.chat.completions.create({
-            model: modelName,
-            max_tokens: 800, // Жесткий лимит для прохождения по бесплатной квоте
-            messages: [
-              {
-                role: 'system',
-                content: 'Ты — ИИ-агент "QA Analyst". Твоя задача — изучить лог падения теста Playwright, сопоставить его с кодом и написать краткое техническое заключение: какая строка упала, почему ожидания не совпали и что конкретно нужно исправить.'
-              },
-              {
-                role: 'user',
-                content: `${ragPromptContext}\n\nОШИБКА:\n${errorMessage}\n\nКОД ТЕСТА:\n${testCode}`
-              }
-            ]
-          });
+        const qaAnalystResponse = await createTracedCompletion('QA Analyst', modelName, () => openai.chat.completions.create({
+          model: modelName,
+          max_tokens: 800,
+          messages: [
+            {
+              role: 'system',
+              content: 'Ты — ИИ-агент "QA Analyst". Твоя задача — изучить лог падения теста Playwright, сопоставить его с кодом и написать краткое техническое заключение: какая строка упала, почему ожидания не совпали и что конкретно нужно исправить.'
+            },
+            {
+              role: 'user',
+              content: `${ragPromptContext}\n\nОШИБКА:\n${errorMessage}\n\nКОД ТЕСТА:\n${testCode}`
+            }
+          ]
+        }));
 
-          const qaReport = recordCompletion(usage, 'QA Analyst', qaAnalystResponse);
-          if (!qaReport) throw new Error('Агент-Аналитик вернул пустой отчет.');
-          console.log(`📝 [QA Analyst] Технический отчет подготовлен.`);
+        const qaReport = recordCompletion(usage, 'QA Analyst', qaAnalystResponse);
+        if (!qaReport) throw new Error('Агент-Аналитик вернул пустой отчет.');
+        console.log(`📝 [QA Analyst] Технический отчет подготовлен.`);
 
-          // ===================================================
-          // 🛠️ АГЕНТ 2: Senior Developer Agent (Генерация кода)
-          // ===================================================
-          console.log(`\n🛠️ [Агент 2 - Senior Developer]: Принимаю отчет аналитика. Пишу патч кода...`);
+        // ===================================================
+        // 🛠️ АГЕНТ 2: Senior Developer Agent (Генерация кода)
+        // ===================================================
+        console.log(`\n🛠️ [Агент 2 - Senior Developer]: Принимаю отчет аналитика. Пишу патч кода...`);
 
-          const developerResponse = await openai.chat.completions.create({
-            model: modelName,
-            max_tokens: 1200, // Лимит на генерацию кода
-            messages: [
-              {
-                role: 'system',
-                content: 'Ты — ИИ-агент "Senior Developer". Ты получаешь код теста и отчет от QA Analyst. Твоя задача — исправить код теста так, чтобы устранить ошибку. Возвращай ТОЛЬКО исправленный полный код файла без markdown оберток.'
-              },
-              {
-                role: 'user',
-                content: `${ragPromptContext}\n\nОРИГИНАЛЬНЫЙ КОД:\n${testCode}\n\nОТЧЕТ ОТ QA ANALYST:\n${qaReport}`
-              }
-            ]
-          });
+        const developerResponse = await createTracedCompletion('Senior Developer', modelName, () => openai.chat.completions.create({
+          model: modelName,
+          max_tokens: 1200,
+          messages: [
+            {
+              role: 'system',
+              content: 'Ты — ИИ-агент "Senior Developer". Ты получаешь код теста и отчет от QA Analyst. Твоя задача — исправить код теста так, чтобы устранить ошибку. Возвращай ТОЛЬКО исправленный полный код файла без markdown оберток.'
+            },
+            {
+              role: 'user',
+              content: `${ragPromptContext}\n\nОРИГИНАЛЬНЫЙ КОД:\n${testCode}\n\nОТЧЕТ ОТ QA ANALYST:\n${qaReport}`
+            }
+          ]
+        }));
 
-          const draftCode = recordCompletion(usage, 'Senior Developer', developerResponse);
-          if (!draftCode) throw new Error('Агент-Разработчик вернул пустой черновик.');
-          console.log(`💻 [Senior Developer] Черновик исправленного кода сгенерирован.`);
+        const draftCode = recordCompletion(usage, 'Senior Developer', developerResponse);
+        if (!draftCode) throw new Error('Агент-Разработчик вернул пустой черновик.');
+        console.log(`💻 [Senior Developer] Черновик исправленного кода сгенерирован.`);
 
-          // ===================================================
-          // 🛡️ АГЕНТ 3: Security & Compliance Agent (Валидация)
-          // ===================================================
-          console.log(`\n🛡️ [Агент 3 - Security & Compliance]: Проверяю код разработчика на уязвимости, хардкод и качество...`);
+        // ===================================================
+        // 🛡️ АГЕНТ 3: Security & Compliance Agent (Валидация)
+        // ===================================================
+        console.log(`\n🛡️ [Агент 3 - Security & Compliance]: Проверяю код разработчика на уязвимости, хардкод и качество...`);
 
-          const securityResponse = await openai.chat.completions.create({
-            model: modelName,
-            max_tokens: 1200,
-            messages: [
-              {
-                role: 'system',
-                content: 'Ты — ИИ-агент "Security & Compliance Auditor". Твоя задача — проверить предложенный исправленный JavaScript-код. Убедись, что код безопасен, в нем нет захардкоженных токенов/секретов, и он синтаксически корректен. Верни финальный, очищенный полный код файла. Правило: возвращай ТОЛЬКО чистый код без markdown блоков.'
-              },
-              {
-                role: 'user',
-                content: `ПРЕДЛОЖЕННЫЙ КОД ДЛЯ ПРОВЕРКИ:\n${draftCode}`
-              }
-            ]
-          });
+        const securityResponse = await createTracedCompletion('Security & Compliance', modelName, () => openai.chat.completions.create({
+          model: modelName,
+          max_tokens: 1200,
+          messages: [
+            {
+              role: 'system',
+              content: 'Ты — ИИ-агент "Security & Compliance Auditor". Твоя задача — проверить предложенный исправленный JavaScript-код. Убедись, что код безопасен, в нем нет захардкоженных токенов/секретов, и он синтаксически корректен. Верни финальный, очищенный полный код файла. Правило: возвращай ТОЛЬКО чистый код без markdown блоков.'
+            },
+            {
+              role: 'user',
+              content: `ПРЕДЛОЖЕННЫЙ КОД ДЛЯ ПРОВЕРКИ:\n${draftCode}`
+            }
+          ]
+        }));
 
-          let finalHealedCode = recordCompletion(usage, 'Security Compliance', securityResponse);
-          if (!finalHealedCode) throw new Error('Агент Безопасности вернул пустой результат.');
+        let finalHealedCode = recordCompletion(usage, 'Security Compliance', securityResponse);
+        if (!finalHealedCode) throw new Error('Агент Безопасности вернул пустой результат.');
 
-          finalHealedCode = finalHealedCode.replace(/^```javascript\s*/i, '').replace(/^```\s*/i, '').replace(/```$/, '').trim();
+        finalHealedCode = finalHealedCode.replace(/^```javascript\s*/i, '').replace(/^```\s*/i, '').replace(/```$/, '').trim();
 
-          // Сохраняем результат совместной работы трех агентов
-          fs.writeFileSync(testFilePath, finalHealedCode, 'utf8');
+        fs.writeFileSync(testFilePath, finalHealedCode, 'utf8');
 
-          console.log('\n======================================================================');
-          console.log(`✨ [AI Self-Healing]: ТРИО АГЕНТОВ (QA -> DEV -> SECURITY) УСПЕШНО ИСПРАВИЛИ ТЕСТ!`);
-          console.log(`📄 Модифицированный файл: ${testFilePath}`);
-          console.log('======================================================================\n');
+        // Расчет суммарных метрик
+        const u1 = qaAnalystResponse.usage || { total_tokens: 0, prompt_tokens: 0, completion_tokens: 0 };
+        const u2 = developerResponse.usage || { total_tokens: 0, prompt_tokens: 0, completion_tokens: 0 };
+        const u3 = securityResponse.usage || { total_tokens: 0, prompt_tokens: 0, completion_tokens: 0 };
+
+        const totalInput = u1.prompt_tokens + u2.prompt_tokens + u3.prompt_tokens;
+        const totalOutput = u1.completion_tokens + u2.completion_tokens + u3.completion_tokens;
+        const totalTokens = u1.total_tokens + u2.total_tokens + u3.total_tokens;
+
+        const cost = ((totalInput * 0.075) / 1000000) + ((totalOutput * 0.30) / 1000000);
+
+        console.log('\n======================================================================');
+        console.log(`✨ [AI Self-Healing]: ТРИО АГЕНТОВ (QA -> DEV -> SECURITY) УСПЕШНО ИСПРАВИЛИ ТЕСТ!`);
+        console.log(`📄 Модифицированный файл: ${testFilePath}`);
+        console.log('----------------------------------------------------------------------');
+        console.log(`📊 [LLMOps Monitor]: Суммарно потрачено токенов командой: ${totalTokens}`);
+        console.log(`💵 Estimated Run Cost: $${cost.toFixed(6)}`);
+        console.log('======================================================================\n');
 
         } catch (error) {
           console.error('[AI Orchestrator] Сбой мультиагентной цепочки:', error.message);
@@ -225,6 +308,20 @@ class AiReporter {
       } catch (error) {
         console.error('[AI Orchestrator] Не удалось запустить LLMOps цепочку:', error.message);
       }
+    }
+  }
+
+  async onEnd() {
+    try {
+      await provider.forceFlush();
+    } catch (error) {
+      console.error('[Phoenix] Не удалось отправить OTLP-трейсы:', error.message);
+    }
+
+    try {
+      await provider.shutdown();
+    } catch (error) {
+      console.error('[Phoenix] Не удалось корректно завершить exporter:', error.message);
     }
   }
 }
