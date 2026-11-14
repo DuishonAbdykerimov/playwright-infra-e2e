@@ -51,8 +51,9 @@ The infrastructure services and the Playwright test runner can run together thro
 | **Redis** | Writes a mock session value to Redis and verifies it can be read back. |
 | **RabbitMQ** | Publishes a JSON order message to a queue, consumes it, and checks its fields. |
 | **RabbitMQ load test** | Publishes 100 test messages, leaves them available for 15 seconds, then drains the queue. |
+| **k6 load test** | Ramps to 50 VUs over 10 seconds, holds for 15 seconds, then ramps down over 10 seconds against a local health endpoint; checks latency and error-rate thresholds. |
 | **RabbitMQ backpressure & DLQ** | Limits queue capacity, publishes beyond the limit, and verifies overflow messages are dead-lettered. |
-| **Stripe contract shape** | Validates required fields and types in a local mock PaymentIntent response; it does not call Stripe. |
+| **OpenAPI contract validation** | Validates a local mock PaymentIntent against the project's OpenAPI schema using Ajv; it does not call Stripe. |
 | **Redis chaos engineering** | Stops the local Compose `redis_cache` service, verifies an operation fails, then restores the service and verifies recovery. |
 | **PostgreSQL performance analysis** | A manually run analyzer captures `EXPLAIN ANALYZE` for a sample query and requests an AI interpretation; it is not an automatic production telemetry collector. |
 
@@ -90,6 +91,9 @@ flowchart LR
     QA -.-> OpenRouter
     Developer -.-> OpenRouter
     Security -.-> OpenRouter
+    LoadTest[k6 staged load test] -->|HTTP health checks| Prometheus[Prometheus]
+    LoadTest -->|Remote write metrics| Prometheus
+    Prometheus --> Grafana[Grafana dashboards]
 ```
 
 - **MongoDB Resilience Testing (Хакер-Разрушитель):** The fixture generator creates MongoDB-shaped resilience data for NoSQL operator handling (including `$ne` and `$gt`), type mutations such as an array in `userId`, and deeply nested payloads. These are synthetic test fixtures; the project does not run a MongoDB server or provide the application's backend.
@@ -101,7 +105,10 @@ flowchart LR
 - **Advanced Performance & Queue Testing:** [`tests/tests/queue-backpressure.spec.js`](./tests/tests/queue-backpressure.spec.js) bounds a RabbitMQ queue, publishes beyond capacity, and verifies overflow routing to a Dead Letter Queue (DLQ).
 - **Database Performance Analysis:** [`scripts/ai/database-performance-analyzer.js`](./scripts/ai/database-performance-analyzer.js) runs a sample PostgreSQL `EXPLAIN ANALYZE` query and can send its plan to OpenRouter for recommendations. It uses a synthetic plan if the sample table is unavailable; automatic alert-driven collection is not configured.
 - **Stripe Contract Testing:** [`tests/tests/contract-stripe.spec.js`](./tests/tests/contract-stripe.spec.js) validates required fields and types in a representative local mock PaymentIntent response. It does not call Stripe or process payments; failed assertions are handled by the configured Playwright reporter.
+- **OpenAPI + Ajv contract validation:** [`contracts/stripe-openapi.json`](./contracts/stripe-openapi.json) defines the PaymentIntent response contract, which the Stripe contract test compiles and validates with Ajv and `ajv-formats`.
 - **Chaos Engineering:** [`tests/tests/chaos-redis.spec.js`](./tests/tests/chaos-redis.spec.js) uses [`chaos-manager.js`](./scripts/ai/database/chaos-manager.js) to stop and restore the local Compose `redis_cache` service, verifying failure behavior and recovery.
+- **RabbitMQ Network Chaos:** [`tests/network-chaos-rabbit.spec.js`](./tests/network-chaos-rabbit.spec.js) applies Linux `tc netem` egress latency to the local broker and verifies the measured AMQP response delay before removing the network rule. The Compose RabbitMQ image installs `iproute2` and grants `NET_ADMIN` for this local test.
+- **k6 Load Testing:** [`load-tests/checkout-load.js`](./load-tests/checkout-load.js) drives a local health endpoint with a 50-VU staged profile and latency/error thresholds. k6 remote-writes its metrics to Prometheus, where they can be explored in Grafana.
 
 ## 🤖 Next-Gen AI & LLMOps Architecture
 
@@ -121,6 +128,7 @@ flowchart LR
 | **MongoDB (NoSQL)** | Generated nested payload fixtures for disruption tests; a MongoDB server is not currently configured |
 | **Redis 7 + `redis`** | Cache integration test |
 | **RabbitMQ 3 + `amqplib`** | AMQP integration, bounded-queue backpressure, and dead-letter routing tests |
+| **k6 + Prometheus remote write** | Staged local HTTP load test with metrics exported to Prometheus for Grafana dashboards |
 | **Stripe PaymentIntent contract** | Local mock response-shape validation; no live Stripe connection |
 | **Docker Compose** | Local, repeatable infrastructure setup |
 | **GitHub Actions** | Dockerized Playwright CI, AI-assisted test repair validation, and Pull Request creation |
@@ -148,7 +156,14 @@ Docker Compose also starts Prometheus, Grafana, Elasticsearch, and Kibana:
 | Kibana | [http://localhost:5601](http://localhost:5601) |
 | Arize Phoenix | [http://localhost:6006](http://localhost:6006) |
 
-Prometheus uses `monitoring/prometheus.yml` to scrape the RabbitMQ metrics endpoint on port `15692`. Run the load-test spec independently with `npx playwright test tests/queue-load-test.spec.js`; RabbitMQ must be running. The test publishes 100 sample messages to its own queue, waits 15 seconds, then drains that queue without interfering with the RabbitMQ integration test.
+Prometheus uses `monitoring/prometheus.yml` to scrape the RabbitMQ metrics endpoint on port `15692` and enables its remote-write receiver for k6. Run the existing RabbitMQ message-load test with `npx playwright test tests/queue-load-test.spec.js`; RabbitMQ must be running. For HTTP load, start the Prometheus service and run:
+
+```bash
+docker compose up -d prometheus
+docker compose --profile load run --rm k6_runner run /scripts/checkout-load.js
+```
+
+The k6 scenario targets Prometheus's local `/-/healthy` endpoint, ramps to 50 virtual users over 10 seconds, holds for 15 seconds, and ramps down over 10 seconds. It requires p(95) latency below 500 ms, less than 1% failed requests, and at least 99% successful checks. Remote-write metrics are available in Prometheus and Grafana; add Prometheus as a Grafana data source (`http://prometheus:9090`) to build a dashboard.
 
 ## 🎬 Reports & debugging artifacts
 
@@ -288,14 +303,17 @@ To also remove the local PostgreSQL volume and its data, use `docker compose dow
 
 ```text
 ├── API/                 # API client for the demo e-commerce application
+├── contracts/           # OpenAPI schemas for API contract tests
 ├── database/            # PostgreSQL and Redis clients
 ├── docs/                # Project architecture illustration
+├── load-tests/          # k6 HTTP load-test scenarios
 ├── monitoring/          # Prometheus scrape configuration
 ├── pages/               # Page Object Model classes
 ├── queue/               # RabbitMQ client
 ├── tests/               # API/browser and infrastructure test specs
 ├── .env.example         # Environment variable template
 ├── Dockerfile           # Playwright test-runner image
+├── Dockerfile.rabbitmq  # RabbitMQ image with tc/netem support
 ├── docker-compose.yml   # Test runner and local infrastructure services
 └── playwright.config.js # Browser project, reporters, and artifacts
 ```
@@ -315,8 +333,9 @@ To also remove the local PostgreSQL volume and its data, use `docker compose dow
 | **Redis** | Запись mock-значения сессии и чтение его обратно. |
 | **RabbitMQ** | Публикация JSON-сообщения, чтение из очереди и проверка полей. |
 | **Нагрузочный тест RabbitMQ** | Публикация 100 тестовых сообщений, ожидание 15 секунд и очистка очереди. |
+| **Нагрузочный тест k6** | Разгон до 50 VU за 10 секунд, удержание 15 секунд и спад за 10 секунд на локальном healthcheck с порогами задержки и ошибок. |
 | **RabbitMQ backpressure и DLQ** | Проверка ограничения длины очереди и перенаправления вытесненных сообщений в Dead Letter Queue. |
-| **Stripe contract shape** | Проверка полей и типов локального mock-ответа PaymentIntent; запрос к Stripe не выполняется. |
+| **OpenAPI + Ajv** | Валидация локального mock-ответа PaymentIntent по JSON-схеме; запрос к Stripe не выполняется. |
 | **Chaos-тест Redis** | Остановка локального Compose-сервиса `redis_cache`, проверка сбоя и восстановление сервиса. |
 | **Анализ производительности PostgreSQL** | Ручной запуск анализатора с `EXPLAIN ANALYZE` для примерного запроса и необязательной AI-рекомендацией. |
 
@@ -335,7 +354,10 @@ To also remove the local PostgreSQL volume and its data, use `docker compose dow
 - **Advanced Performance & Queue Testing:** [`tests/tests/queue-backpressure.spec.js`](./tests/tests/queue-backpressure.spec.js) ограничивает размер очереди RabbitMQ, отправляет сообщений больше лимита и проверяет перенаправление лишних сообщений в Dead Letter Queue (DLQ).
 - **Database Performance Analysis:** [`scripts/ai/database-performance-analyzer.js`](./scripts/ai/database-performance-analyzer.js) выполняет примерный PostgreSQL-запрос с `EXPLAIN ANALYZE` и может отправить план в OpenRouter для рекомендаций. Если тестовая таблица отсутствует, используется синтетический план; автоматический сбор по алертам не настроен.
 - **Stripe Contract Testing:** [`tests/tests/contract-stripe.spec.js`](./tests/tests/contract-stripe.spec.js) проверяет обязательные поля и типы на локальном mock-ответе PaymentIntent. Реальный Stripe API не вызывается, платежи не обрабатываются; при падении теста используется настроенный Playwright reporter.
+- **OpenAPI + Ajv:** [`contracts/stripe-openapi.json`](./contracts/stripe-openapi.json) содержит контракт ответа PaymentIntent; тест компилирует схему через Ajv и `ajv-formats` и валидирует локальный mock без обращения к Stripe.
 - **Chaos Engineering:** [`tests/tests/chaos-redis.spec.js`](./tests/tests/chaos-redis.spec.js) через [`chaos-manager.js`](./scripts/ai/database/chaos-manager.js) останавливает и восстанавливает локальный Compose-сервис `redis_cache`, проверяя поведение при отказе и восстановление.
+- **Сетевой Chaos для RabbitMQ:** [`tests/network-chaos-rabbit.spec.js`](./tests/network-chaos-rabbit.spec.js) применяет Linux `tc netem` для задержки исходящего трафика локального брокера и измеряет реальную задержку ответа AMQP, после чего удаляет сетевое правило. Для теста Compose-образ RabbitMQ устанавливает `iproute2` и получает `NET_ADMIN`.
+- **k6 Load Testing:** [`load-tests/checkout-load.js`](./load-tests/checkout-load.js) создаёт ступенчатую локальную HTTP-нагрузку до 50 VU и проверяет пороги задержки/ошибок. k6 отправляет метрики в Prometheus, откуда их можно анализировать в Grafana.
 
 ### 🤖 Next-Gen AI и LLMOps-архитектура
 
@@ -379,7 +401,16 @@ Docker Compose также запускает Prometheus, Grafana, Elasticsearch 
 | Kibana | [http://localhost:5601](http://localhost:5601) |
 | Arize Phoenix | [http://localhost:6006](http://localhost:6006) |
 
-Prometheus использует `monitoring/prometheus.yml` для сбора метрик RabbitMQ через порт `15692`. Нагрузочный тест можно запустить отдельно командой `npx playwright test tests/queue-load-test.spec.js`; для него должен быть запущен RabbitMQ. Тест публикует 100 примеров сообщений в отдельную очередь, ждёт 15 секунд и затем очищает её, не мешая обычному RabbitMQ-тесту.
+Prometheus использует `monitoring/prometheus.yml` для сбора метрик RabbitMQ через порт `15692` и принимает remote-write от k6. Существующий нагрузочный тест сообщений RabbitMQ запускается командой `npx playwright test tests/queue-load-test.spec.js`; он публикует 100 сообщений в отдельную очередь, ждёт 15 секунд и очищает её.
+
+HTTP-нагрузочный сценарий запускайте отдельно:
+
+```bash
+docker compose up -d prometheus
+docker compose --profile load run --rm k6_runner run /scripts/checkout-load.js
+```
+
+Сценарий обращается к локальному healthcheck Prometheus: разгоняет нагрузку до 50 VU за 10 секунд, удерживает её 15 секунд и снижает до нуля за 10 секунд. Пороги: p(95) < 500 ms, доля ошибок < 1%, успешные проверки > 99%. Метрики доступны в Prometheus и Grafana; добавьте Prometheus data source с адресом `http://prometheus:9090`.
 
 Если хотите запускать тесты непосредственно на компьютере, сначала поднимите только инфраструктуру:
 

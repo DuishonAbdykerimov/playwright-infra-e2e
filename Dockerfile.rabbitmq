@@ -1,0 +1,5 @@
+FROM rabbitmq:3-management-alpine
+
+USER root
+RUN apk add --no-cache iproute2
+USER rabbitmq
