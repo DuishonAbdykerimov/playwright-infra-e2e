@@ -201,10 +201,15 @@ class AiReporter {
         };
 
         try {
+          let ragPromptContext = '';
           console.log('\n📚 [RAG]: Ищу релевантную документацию для ошибки теста...');
-          const knowledgeContext = await retrieveProjectContext(openai, errorMessage);
-          const ragPromptContext = `CONTEXT FROM PROJECT KNOWLEDGE BASE:\n${knowledgeContext}`;
-          console.log('📚 [RAG]: Релевантный контекст найден.');
+          try {
+            const knowledgeContext = await retrieveProjectContext(openai, errorMessage);
+            ragPromptContext = `CONTEXT FROM PROJECT KNOWLEDGE BASE:\n${knowledgeContext}\n\n`;
+            console.log('📚 [RAG]: Релевантный контекст найден.');
+          } catch (error) {
+            console.warn(`[RAG]: Контекст недоступен, продолжаю без RAG: ${error.message}`);
+          }
 
           // ===================================================
         // 🕵️‍♂️ АГЕНТ 1: QA Analyst Agent (Технический Анализ)
@@ -221,7 +226,7 @@ class AiReporter {
             },
             {
               role: 'user',
-              content: `${ragPromptContext}\n\nОШИБКА:\n${errorMessage}\n\nКОД ТЕСТА:\n${testCode}`
+              content: `${ragPromptContext}ОШИБКА:\n${errorMessage}\n\nКОД ТЕСТА:\n${testCode}`
             }
           ]
         }));
@@ -245,7 +250,7 @@ class AiReporter {
             },
             {
               role: 'user',
-              content: `${ragPromptContext}\n\nОРИГИНАЛЬНЫЙ КОД:\n${testCode}\n\nОТЧЕТ ОТ QA ANALYST:\n${qaReport}`
+              content: `${ragPromptContext}ОРИГИНАЛЬНЫЙ КОД:\n${testCode}\n\nОТЧЕТ ОТ QA ANALYST:\n${qaReport}`
             }
           ]
         }));

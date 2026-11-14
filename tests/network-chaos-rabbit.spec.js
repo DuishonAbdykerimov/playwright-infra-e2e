@@ -11,6 +11,11 @@ test.describe('Network Chaos: RabbitMQ latency resilience', () => {
   let channel;
   let queue;
 
+  test.beforeAll(async () => {
+    const docker = await ChaosManager.checkDockerAvailability();
+    test.skip(!docker.available, `Skipping RabbitMQ network chaos test: ${docker.reason}`);
+  });
+
   test.afterEach(async () => {
     try {
       await ChaosManager.clearNetworkChaos(rabbitContainer);

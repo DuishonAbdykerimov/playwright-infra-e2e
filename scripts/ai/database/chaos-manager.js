@@ -1,13 +1,51 @@
 import { execFile } from 'node:child_process';
+import { constants } from 'node:fs';
+import { access } from 'node:fs/promises';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
+const dockerSocketPath = process.env.DOCKER_SOCKET_PATH || '/var/run/docker.sock';
+
+async function checkDockerAvailability() {
+  try {
+    await access(dockerSocketPath, constants.R_OK | constants.W_OK);
+  } catch {
+    return {
+      available: false,
+      reason: `Docker socket is unavailable at ${dockerSocketPath}.`,
+    };
+  }
+
+  try {
+    await execFileAsync('docker', ['info', '--format', '{{.ServerVersion}}'], { timeout: 5000 });
+  } catch (error) {
+    return {
+      available: false,
+      reason: error.code === 'ENOENT'
+        ? 'Docker CLI is not installed.'
+        : `Docker daemon is unavailable: ${error.message}`,
+    };
+  }
+
+  return { available: true, reason: '' };
+}
 
 async function runDocker(args) {
+  const availability = await checkDockerAvailability();
+  if (!availability.available) {
+    const error = new Error(availability.reason);
+    error.code = 'DOCKER_UNAVAILABLE';
+    throw error;
+  }
+
   return execFileAsync('docker', args, { timeout: 15_000 });
 }
 
 export class ChaosManager {
+  static async checkDockerAvailability() {
+    return checkDockerAvailability();
+  }
+
   static async killService(serviceName) {
     console.log(`⚠️ [Chaos Monkey]: Инициирую падение сервиса "${serviceName}"...`);
     await runDocker(['compose', 'stop', serviceName]);
